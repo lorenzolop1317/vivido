@@ -950,7 +950,7 @@ function Lightbox({
   onClose: () => void;
   onNavigate: (index: number) => void;
   onToggleLike: (mediaId: string) => void;
-  onDelete?: (mediaId: string) => void;
+  onDelete?: (mediaId: string) => void | Promise<void>;
 }) {
   const item = media[index];
   const [loaded, setLoaded] = useState(false);
@@ -969,9 +969,31 @@ function Lightbox({
     setBroken(false);
   }, [index]);
 
+  // El botón "atrás" del celular navega el historial del navegador, no
+  // "cierra" nada de por sí — sin esto, un usuario que use ese botón (la
+  // gran mayoría en Android) termina saliendo de la web entera en vez de
+  // cerrar solo el visor. Al abrir el visor empujamos una entrada extra al
+  // historial; "atrás" entonces primero consume esa entrada (dispara
+  // popstate, que cerramos acá) en vez de abandonar la página. Cerrar con
+  // la X hace lo mismo mediante history.back(), para no dejar una entrada
+  // fantasma que obligue a tocar "atrás" dos veces.
+  useEffect(() => {
+    window.history.pushState({ vividoLightbox: true }, '');
+    function onPopState() {
+      onClose();
+    }
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function requestClose() {
+    window.history.back();
+  }
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') requestClose();
       if (e.key === 'ArrowRight') goTo(1);
       if (e.key === 'ArrowLeft') goTo(-1);
     }
@@ -981,26 +1003,17 @@ function Lightbox({
       window.removeEventListener('keydown', onKeyDown);
       document.body.style.overflow = '';
     };
-  }, [goTo, onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goTo]);
 
   if (!item) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-sm" onClick={onClose}>
-      {!loaded && !broken && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <Spinner className="h-10 w-10 text-white/60" />
-        </div>
-      )}
-      {broken && (
-        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-white/50">
-          <BrokenImageIcon className="h-10 w-10" />
-          <span className="text-xs font-medium uppercase tracking-wide">No se pudo cargar este archivo</span>
-        </div>
-      )}
+  const ratio = item.width && item.height ? `${item.width} / ${item.height}` : '4 / 3';
 
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-sm" onClick={requestClose}>
       <button
-        onClick={onClose}
+        onClick={requestClose}
         aria-label="Cerrar"
         className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
       >
@@ -1033,29 +1046,42 @@ function Lightbox({
       )}
 
       <div className="relative z-[1] flex max-h-[85vh] max-w-[92vw] flex-col items-center gap-4" onClick={(e) => e.stopPropagation()}>
-        {item.kind === 'photo' ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={item.viewUrl}
-            alt=""
-            onLoad={() => setLoaded(true)}
-            onError={() => setBroken(true)}
-            className={`max-h-[75vh] max-w-[92vw] rounded-lg object-contain shadow-2xl transition-opacity duration-200 ${
-              loaded ? 'opacity-100' : 'opacity-0'
-            }`}
-          />
-        ) : (
-          <video
-            src={item.viewUrl}
-            controls
-            autoPlay
-            onLoadedData={() => setLoaded(true)}
-            onError={() => setBroken(true)}
-            className={`max-h-[75vh] max-w-[92vw] rounded-lg object-contain shadow-2xl transition-opacity duration-200 ${
-              loaded ? 'opacity-100' : 'opacity-0'
-            }`}
-          />
-        )}
+        <div
+          className="relative flex items-center justify-center overflow-hidden rounded-lg shadow-2xl"
+          style={{ aspectRatio: ratio, height: '75vh', maxWidth: '92vw', maxHeight: '75vh' }}
+        >
+          {!loaded && !broken && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/5">
+              <Spinner className="h-10 w-10 text-white/60" />
+            </div>
+          )}
+          {broken && (
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-white/5 text-white/50">
+              <BrokenImageIcon className="h-10 w-10" />
+              <span className="text-xs font-medium uppercase tracking-wide">No se pudo cargar este archivo</span>
+            </div>
+          )}
+
+          {item.kind === 'photo' ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={item.viewUrl}
+              alt=""
+              onLoad={() => setLoaded(true)}
+              onError={() => setBroken(true)}
+              className={`h-full w-full object-contain transition-opacity duration-200 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+            />
+          ) : (
+            <video
+              src={item.viewUrl}
+              controls
+              autoPlay
+              onLoadedData={() => setLoaded(true)}
+              onError={() => setBroken(true)}
+              className={`h-full w-full object-contain transition-opacity duration-200 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+            />
+          )}
+        </div>
 
         <div className="flex flex-wrap items-center justify-center gap-3">
           <button
@@ -1076,8 +1102,10 @@ function Lightbox({
           </a>
           {onDelete && (
             <button
-              onClick={() => {
-                if (confirm('¿Borrar esta foto/video?')) onDelete(item.id);
+              onClick={async () => {
+                if (!confirm('¿Borrar esta foto/video?')) return;
+                await onDelete(item.id);
+                window.history.back(); // limpia la entrada de historial que abrimos al abrir el visor
               }}
               className="rounded-full border border-white/30 px-4 py-2 text-sm font-medium text-white hover:bg-white/10"
             >
