@@ -118,6 +118,17 @@ function CheckIcon({ className }: { className?: string }) {
   );
 }
 
+function BrokenImageIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={className}>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+      <path d="m3.5 15.5 4.5-4.5a2 2 0 0 1 2.8 0l2.2 2.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m13.5 12.5.7-.7a2 2 0 0 1 2.8 0l3.5 3.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M2.5 2.5l19 19" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function Spinner({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={`animate-spin ${className ?? ''}`}>
@@ -172,6 +183,10 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
   const [uploadSummary, setUploadSummary] = useState<UploadSummary | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [brokenIds, setBrokenIds] = useState<Set<string>>(new Set());
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -356,6 +371,62 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
     setLightboxIndex(null);
     setMediaItems((prev) => prev.filter((m) => m.id !== mediaId));
     setMeta((prev) => ({ ...prev, mediaTotal: Math.max(0, prev.mediaTotal - 1) }));
+    setBrokenIds((prev) => {
+      if (!prev.has(mediaId)) return prev;
+      const next = new Set(prev);
+      next.delete(mediaId);
+      return next;
+    });
+  }
+
+  function toggleSelectMode() {
+    setSelectMode((prev) => !prev);
+    setSelectedIds(new Set());
+  }
+
+  function toggleSelected(mediaId: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(mediaId)) next.delete(mediaId);
+      else next.add(mediaId);
+      return next;
+    });
+  }
+
+  function selectAllBroken() {
+    setSelectMode(true);
+    setSelectedIds(new Set(brokenIds));
+  }
+
+  async function handleBulkDelete() {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`¿Borrar ${selectedIds.size} ${selectedIds.size === 1 ? 'foto/video' : 'fotos/videos'}?`)) return;
+
+    setBulkDeleting(true);
+    const ids = Array.from(selectedIds);
+    const results = await Promise.all(
+      ids.map(async (id) => {
+        const res = await fetch(`/api/media/${id}?token=${token}&deviceId=${deviceId}`, { method: 'DELETE' });
+        return { id, ok: res.ok };
+      })
+    );
+    const succeededIds = new Set(results.filter((r) => r.ok).map((r) => r.id));
+    const failedCount = results.length - succeededIds.size;
+
+    setMediaItems((prev) => prev.filter((m) => !succeededIds.has(m.id)));
+    setMeta((prev) => ({ ...prev, mediaTotal: Math.max(0, prev.mediaTotal - succeededIds.size) }));
+    setBrokenIds((prev) => {
+      const next = new Set(prev);
+      succeededIds.forEach((id) => next.delete(id));
+      return next;
+    });
+    setSelectedIds(new Set());
+    setBulkDeleting(false);
+    setSelectMode(false);
+
+    if (failedCount > 0) {
+      alert(`${failedCount} ${failedCount === 1 ? 'no se pudo borrar' : 'no se pudieron borrar'}.`);
+    }
   }
 
   async function handleClose() {
@@ -393,7 +464,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
   const showInlineCta = mediaTotal === 0 && uploadAvailable && !modalOpen;
 
   return (
-    <main className="mx-auto min-h-screen max-w-5xl px-4 py-8 sm:px-6">
+    <main className={`mx-auto min-h-screen max-w-5xl px-4 py-8 sm:px-6 ${selectMode ? 'pb-24' : ''}`}>
       <input
         ref={cameraInputRef}
         type="file"
@@ -422,19 +493,46 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
           </p>
         </div>
 
-        {mediaTotal > 0 && uploadAvailable && (
-          <button
-            onClick={() => {
-              setModalOpen(true);
-              setUploadStage('idle');
-            }}
-            className="flex items-center gap-2 rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-dark hover:shadow-md"
-          >
-            <ImagesIcon className="h-4 w-4" />
-            Cargar más fotos
-          </button>
+        {mediaTotal > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {canModerate && (
+              <button
+                onClick={toggleSelectMode}
+                className="rounded-full border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-600 shadow-sm transition hover:bg-gray-50"
+              >
+                {selectMode ? 'Cancelar selección' : 'Seleccionar'}
+              </button>
+            )}
+            {uploadAvailable && (
+              <button
+                onClick={() => {
+                  setModalOpen(true);
+                  setUploadStage('idle');
+                }}
+                className="flex items-center gap-2 rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-dark hover:shadow-md"
+              >
+                <ImagesIcon className="h-4 w-4" />
+                Cargar más fotos
+              </button>
+            )}
+          </div>
         )}
       </header>
+
+      {brokenIds.size > 0 && canModerate && (
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-amber-50 p-4 text-sm text-amber-800">
+          <span>
+            {brokenIds.size} {brokenIds.size === 1 ? 'archivo no se pudo cargar' : 'archivos no se pudieron cargar'} (se perdieron al
+            subirlos).
+          </span>
+          <button
+            onClick={selectAllBroken}
+            className="shrink-0 rounded-full bg-amber-600 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-700"
+          >
+            Seleccionar {brokenIds.size === 1 ? 'ese archivo' : 'todos'}
+          </button>
+        </div>
+      )}
 
       {windows.isArchived ? (
         <div className="mb-6 rounded-lg bg-amber-50 p-4 text-sm text-amber-800">
@@ -505,15 +603,42 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
               key={item.id}
               item={item}
               canDelete={canDelete}
+              selectMode={selectMode}
+              selected={selectedIds.has(item.id)}
               onOpen={() => setLightboxIndex(index)}
+              onToggleSelect={() => toggleSelected(item.id)}
               onToggleLike={() => handleToggleLike(item.id)}
               onDelete={() => {
                 if (confirm('¿Borrar esta foto/video?')) handleDelete(item.id);
               }}
+              onBroken={() => setBrokenIds((prev) => new Set(prev).add(item.id))}
             />
           );
         })}
       </div>
+
+      {selectMode && (
+        <div className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-between gap-3 border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-4px_20px_rgba(0,0,0,0.1)] sm:px-6">
+          <span className="text-sm font-medium text-gray-600">
+            {selectedIds.size} {selectedIds.size === 1 ? 'seleccionada' : 'seleccionadas'}
+          </span>
+          <div className="flex gap-2">
+            <button
+              onClick={toggleSelectMode}
+              className="rounded-full border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleBulkDelete}
+              disabled={selectedIds.size === 0 || bulkDeleting}
+              className="rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-40"
+            >
+              {bulkDeleting ? 'Borrando…' : `Borrar${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}`}
+            </button>
+          </div>
+        </div>
+      )}
 
       {(hasMore || loadingMore) && (
         <div ref={sentinelRef} className="flex justify-center py-8">
@@ -557,37 +682,68 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
 function Thumbnail({
   item,
   canDelete,
+  selectMode,
+  selected,
   onOpen,
+  onToggleSelect,
   onToggleLike,
   onDelete,
+  onBroken,
 }: {
   item: MediaItem;
   canDelete: boolean;
+  selectMode: boolean;
+  selected: boolean;
   onOpen: () => void;
+  onToggleSelect: () => void;
   onToggleLike: () => void;
   onDelete: () => void;
+  onBroken: () => void;
 }) {
   const [loaded, setLoaded] = useState(false);
+  const [broken, setBroken] = useState(false);
   const ratio = item.width && item.height ? `${item.width} / ${item.height}` : '4 / 3';
+  const selectable = selectMode && canDelete;
+
+  function handleClick() {
+    if (selectMode) {
+      if (selectable) onToggleSelect();
+      return;
+    }
+    onOpen();
+  }
+
+  function handleBroken() {
+    setBroken(true);
+    onBroken();
+  }
 
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => e.key === 'Enter' && onOpen()}
+      onClick={handleClick}
+      onKeyDown={(e) => e.key === 'Enter' && handleClick()}
       style={{ aspectRatio: ratio }}
-      className="group relative mb-3 block w-full cursor-zoom-in overflow-hidden rounded-xl bg-gray-100 shadow-sm sm:mb-4"
+      className={`group relative mb-3 block w-full overflow-hidden rounded-xl bg-gray-100 shadow-sm sm:mb-4 ${
+        selectMode ? (selectable ? 'cursor-pointer' : 'cursor-not-allowed opacity-50') : 'cursor-zoom-in'
+      }`}
     >
-      <div className={`skeleton-shimmer absolute inset-0 transition-opacity duration-300 ${loaded ? 'opacity-0' : 'opacity-100'}`} />
+      {!broken && <div className={`skeleton-shimmer absolute inset-0 transition-opacity duration-300 ${loaded ? 'opacity-0' : 'opacity-100'}`} />}
 
-      {item.kind === 'photo' ? (
+      {broken ? (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-gray-100 text-gray-400">
+          <BrokenImageIcon className="h-6 w-6" />
+          <span className="text-[10px] font-medium uppercase tracking-wide">No se pudo cargar</span>
+        </div>
+      ) : item.kind === 'photo' ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={item.viewUrl}
           alt=""
           loading="lazy"
           onLoad={() => setLoaded(true)}
+          onError={handleBroken}
           className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ease-out group-hover:scale-[1.03] ${
             loaded ? 'opacity-100' : 'opacity-0'
           }`}
@@ -599,6 +755,7 @@ function Thumbnail({
             muted
             preload="metadata"
             onLoadedData={() => setLoaded(true)}
+            onError={handleBroken}
             className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
           />
           {loaded && (
@@ -611,31 +768,50 @@ function Thumbnail({
         </>
       )}
 
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent opacity-0 transition group-hover:opacity-100" />
+      {!selectMode && (
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent opacity-0 transition group-hover:opacity-100" />
+      )}
 
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggleLike();
-        }}
-        className={`absolute bottom-2 left-2 flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium backdrop-blur-sm transition sm:px-3.5 sm:py-2 sm:text-sm ${
-          item.likedByMe ? 'bg-brand text-white' : 'bg-black/45 text-white hover:bg-black/60'
-        }`}
-      >
-        <HeartIcon className="h-3.5 w-3.5 sm:h-5 sm:w-5" filled={item.likedByMe} />
-        {item.likeCount > 0 && item.likeCount}
-      </button>
+      {selectMode ? (
+        selectable && (
+          <>
+            {selected && <div className="pointer-events-none absolute inset-0 bg-brand/25 ring-4 ring-inset ring-brand" />}
+            <div
+              className={`absolute left-2 top-2 flex h-6 w-6 items-center justify-center rounded-full border-2 transition ${
+                selected ? 'border-brand bg-brand text-white' : 'border-white/80 bg-black/30 text-transparent'
+              }`}
+            >
+              <CheckIcon className="h-3.5 w-3.5" />
+            </div>
+          </>
+        )
+      ) : (
+        <>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleLike();
+            }}
+            className={`absolute bottom-2 left-2 flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium backdrop-blur-sm transition sm:px-3.5 sm:py-2 sm:text-sm ${
+              item.likedByMe ? 'bg-brand text-white' : 'bg-black/45 text-white hover:bg-black/60'
+            }`}
+          >
+            <HeartIcon className="h-3.5 w-3.5 sm:h-5 sm:w-5" filled={item.likedByMe} />
+            {item.likeCount > 0 && item.likeCount}
+          </button>
 
-      {canDelete && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="absolute right-2 top-2 rounded-full bg-black/60 px-2.5 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100"
-        >
-          Borrar
-        </button>
+          {canDelete && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete();
+              }}
+              className="absolute right-2 top-2 rounded-full bg-black/60 px-2.5 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100"
+            >
+              Borrar
+            </button>
+          )}
+        </>
       )}
     </div>
   );
@@ -778,6 +954,7 @@ function Lightbox({
 }) {
   const item = media[index];
   const [loaded, setLoaded] = useState(false);
+  const [broken, setBroken] = useState(false);
 
   const goTo = useCallback(
     (delta: number) => {
@@ -789,6 +966,7 @@ function Lightbox({
 
   useEffect(() => {
     setLoaded(false);
+    setBroken(false);
   }, [index]);
 
   useEffect(() => {
@@ -809,9 +987,15 @@ function Lightbox({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-sm" onClick={onClose}>
-      {!loaded && (
+      {!loaded && !broken && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <Spinner className="h-10 w-10 text-white/60" />
+        </div>
+      )}
+      {broken && (
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-white/50">
+          <BrokenImageIcon className="h-10 w-10" />
+          <span className="text-xs font-medium uppercase tracking-wide">No se pudo cargar este archivo</span>
         </div>
       )}
 
@@ -855,6 +1039,7 @@ function Lightbox({
             src={item.viewUrl}
             alt=""
             onLoad={() => setLoaded(true)}
+            onError={() => setBroken(true)}
             className={`max-h-[75vh] max-w-[92vw] rounded-lg object-contain shadow-2xl transition-opacity duration-200 ${
               loaded ? 'opacity-100' : 'opacity-0'
             }`}
@@ -865,6 +1050,7 @@ function Lightbox({
             controls
             autoPlay
             onLoadedData={() => setLoaded(true)}
+            onError={() => setBroken(true)}
             className={`max-h-[75vh] max-w-[92vw] rounded-lg object-contain shadow-2xl transition-opacity duration-200 ${
               loaded ? 'opacity-100' : 'opacity-0'
             }`}
