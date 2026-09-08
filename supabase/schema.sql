@@ -1,0 +1,50 @@
+-- Esquema inicial. Pegar y ejecutar en el SQL Editor del proyecto de Supabase.
+-- Ver README.md para el paso a paso completo de configuración.
+
+create extension if not exists "pgcrypto";
+
+create table if not exists albums (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  event_date date,
+  location text,
+  plan text not null default 'free' check (plan in ('free', 'pro')),
+  status text not null default 'active' check (status in ('active', 'closed', 'archived')),
+  storage_limit_bytes bigint not null default 3221225472, -- 3 GB (plan free)
+  video_max_seconds int default 60, -- null = sin límite (plan pago)
+  upload_window_days int default 14, -- null = sin ventana fija (plan pago)
+  retention_days int default 30, -- null = retención indefinida (plan pago)
+  created_at timestamptz not null default now()
+);
+
+create table if not exists album_tokens (
+  token text primary key,
+  album_id uuid not null references albums(id) on delete cascade,
+  role text not null check (role in ('organizer', 'moderator', 'contributor', 'viewer')),
+  label text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists album_tokens_album_id_idx on album_tokens(album_id);
+
+create table if not exists media (
+  id uuid primary key default gen_random_uuid(),
+  album_id uuid not null references albums(id) on delete cascade,
+  r2_key text not null unique,
+  kind text not null check (kind in ('photo', 'video')),
+  content_type text not null,
+  size_bytes bigint not null,
+  duration_seconds numeric,
+  uploaded_by_token text references album_tokens(token) on delete set null,
+  uploader_device_id text, -- id anónimo generado en el navegador de quien subió (ver lib/albums.ts)
+  uploader_label text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists media_album_id_idx on media(album_id);
+
+-- Row Level Security queda deshabilitada a propósito: todo el acceso pasa por las
+-- API routes de Next.js usando la Service Role Key (ver lib/supabase.ts). Los
+-- invitados no tienen sesión de Supabase — su "permiso" es poseer el token de la URL.
+-- Si más adelante se agrega login real de organizador con Supabase Auth, ahí sí
+-- conviene habilitar RLS para ese camino.
