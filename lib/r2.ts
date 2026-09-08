@@ -46,6 +46,23 @@ export async function createViewUrl(key: string) {
   return getSignedUrl(client, command, { expiresIn: VIEW_URL_TTL_SECONDS });
 }
 
+/**
+ * Igual que createViewUrl, pero le pide a R2 que responda con
+ * Content-Disposition: attachment. Así un <a href="..."> normal dispara una
+ * descarga real (con el nombre de archivo elegido) en vez de abrir la imagen
+ * en una pestaña nueva — funciona incluso siendo la URL de otro dominio,
+ * porque el header lo pone el servidor, no el atributo `download` del link.
+ */
+export async function createDownloadUrl(key: string, filename: string) {
+  const client = getR2Client();
+  const command = new GetObjectCommand({
+    Bucket: getBucketName(),
+    Key: key,
+    ResponseContentDisposition: `attachment; filename="${filename}"`,
+  });
+  return getSignedUrl(client, command, { expiresIn: VIEW_URL_TTL_SECONDS });
+}
+
 export async function deleteObject(key: string) {
   const client = getR2Client();
   await client.send(new DeleteObjectCommand({ Bucket: getBucketName(), Key: key }));

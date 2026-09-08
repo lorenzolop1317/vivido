@@ -1,7 +1,23 @@
 import { getSupabaseAdmin } from './supabase';
-import { createUploadUrl, createViewUrl, deleteObject } from './r2';
+import { createUploadUrl, createViewUrl, createDownloadUrl, deleteObject } from './r2';
 import { generateAccessToken } from './tokens';
 import { FREE_PLAN, kindForContentType } from './limits';
+
+function slugify(text: string) {
+  return text
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '')
+    .slice(0, 40);
+}
+
+function downloadFilename(albumName: string, mediaId: string, contentType: string) {
+  const extension = contentType.split('/')[1]?.replace('quicktime', 'mov') ?? 'bin';
+  const base = slugify(albumName) || 'vivido';
+  return `${base}-${mediaId.slice(0, 8)}.${extension}`;
+}
 
 export type AlbumRole = 'organizer' | 'moderator' | 'contributor' | 'viewer';
 
@@ -101,7 +117,7 @@ export interface AlbumViewModel {
   storageUsedBytes: number;
   canUpload: boolean;
   canModerate: boolean; // borrar cualquier contenido, cerrar álbum, exportar
-  media: Array<MediaRow & { viewUrl: string }>;
+  media: Array<MediaRow & { viewUrl: string; downloadUrl: string }>;
 }
 
 export async function getAlbumView(token: string): Promise<AlbumViewModel | null> {
@@ -124,6 +140,9 @@ export async function getAlbumView(token: string): Promise<AlbumViewModel | null
     (mediaRows ?? []).map(async (row) => ({
       ...(row as MediaRow),
       viewUrl: windows.isArchived ? '' : await createViewUrl(row.r2_key),
+      downloadUrl: windows.isArchived
+        ? ''
+        : await createDownloadUrl(row.r2_key, downloadFilename(album.name, row.id, row.content_type)),
     }))
   );
 
