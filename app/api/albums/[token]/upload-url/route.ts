@@ -13,6 +13,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ to
     contentType: body.contentType,
     sizeBytes: body.sizeBytes,
     durationSeconds: typeof body.durationSeconds === 'number' ? body.durationSeconds : undefined,
+    width: typeof body.width === 'number' ? body.width : undefined,
+    height: typeof body.height === 'number' ? body.height : undefined,
     uploaderLabel: typeof body.uploaderLabel === 'string' ? body.uploaderLabel : undefined,
     uploaderDeviceId: typeof body.uploaderDeviceId === 'string' ? body.uploaderDeviceId : undefined,
   });

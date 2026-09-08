@@ -1,5 +1,5 @@
 import { getSupabaseAdmin } from './supabase';
-import { createUploadUrl, createViewUrl, createDownloadUrl, deleteObject } from './r2';
+import { createUploadUrl, getViewUrl, createDownloadUrl, deleteObject } from './r2';
 import { generateAccessToken } from './tokens';
 import { FREE_PLAN, kindForContentType } from './limits';
 
@@ -43,11 +43,15 @@ export interface MediaRow {
   content_type: string;
   size_bytes: number;
   duration_seconds: number | null;
+  width: number | null;
+  height: number | null;
   uploaded_by_token: string | null;
   uploader_device_id: string | null;
   uploader_label: string | null;
   created_at: string;
 }
+
+export const MEDIA_PAGE_SIZE = 30;
 
 export interface AlbumWindows {
   uploadOpen: boolean;
@@ -110,6 +114,13 @@ export async function getStorageUsedBytes(albumId: string): Promise<number> {
   return (data ?? []).reduce((sum, row) => sum + Number(row.size_bytes), 0);
 }
 
+export type MediaItem = MediaRow & {
+  viewUrl: string;
+  downloadUrl: string;
+  likeCount: number;
+  likedByMe: boolean;
+};
+
 export interface AlbumViewModel {
   role: AlbumRole;
   album: AlbumRow;
@@ -117,28 +128,22 @@ export interface AlbumViewModel {
   storageUsedBytes: number;
   canUpload: boolean;
   canModerate: boolean; // borrar cualquier contenido, cerrar álbum, exportar
-  media: Array<MediaRow & { viewUrl: string; downloadUrl: string; likeCount: number; likedByMe: boolean }>;
+  media: MediaItem[];
+  mediaTotal: number;
+  hasMore: boolean;
 }
 
-export async function getAlbumView(token: string, deviceId?: string | null): Promise<AlbumViewModel | null> {
-  const resolved = await resolveToken(token);
-  if (!resolved) return null;
-  const { role, album } = resolved;
-
+async function attachLikesAndUrls(
+  rows: Array<Record<string, unknown>>,
+  album: AlbumRow,
+  isArchived: boolean,
+  deviceId?: string | null
+): Promise<MediaItem[]> {
   const supabase = getSupabaseAdmin();
-  const { data: mediaRows, error } = await supabase
-    .from('media')
-    .select('*')
-    .eq('album_id', album.id)
-    .order('created_at', { ascending: false });
-  if (error) throw error;
-
-  const windows = computeWindows(album);
-  const storageUsedBytes = (mediaRows ?? []).reduce((sum, row) => sum + Number(row.size_bytes), 0);
-
-  const mediaIds = (mediaRows ?? []).map((row) => row.id);
+  const mediaIds = rows.map((row) => row.id as string);
   const likeCounts = new Map<string, number>();
   const likedByMeSet = new Set<string>();
+
   if (mediaIds.length > 0) {
     const { data: likeRows, error: likesError } = await supabase
       .from('media_likes')
@@ -151,17 +156,56 @@ export async function getAlbumView(token: string, deviceId?: string | null): Pro
     }
   }
 
-  const media = await Promise.all(
-    (mediaRows ?? []).map(async (row) => ({
-      ...(row as MediaRow),
-      viewUrl: windows.isArchived ? '' : await createViewUrl(row.r2_key),
-      downloadUrl: windows.isArchived
-        ? ''
-        : await createDownloadUrl(row.r2_key, downloadFilename(album.name, row.id, row.content_type)),
-      likeCount: likeCounts.get(row.id) ?? 0,
-      likedByMe: likedByMeSet.has(row.id),
-    }))
+  return Promise.all(
+    rows.map(async (rawRow) => {
+      const row = rawRow as unknown as MediaRow;
+      return {
+        ...row,
+        viewUrl: isArchived ? '' : await getViewUrl(row.r2_key),
+        downloadUrl: isArchived ? '' : await createDownloadUrl(row.r2_key, downloadFilename(album.name, row.id, row.content_type)),
+        likeCount: likeCounts.get(row.id) ?? 0,
+        likedByMe: likedByMeSet.has(row.id),
+      };
+    })
   );
+}
+
+/**
+ * Trae una "página" de fotos/videos de un álbum, más los datos generales
+ * (rol, ventanas, uso de almacenamiento) que no dependen de qué página se
+ * esté mirando. Se usa tanto para la carga inicial (offset 0) como para
+ * "cargar más" a medida que se hace scroll.
+ */
+export async function getAlbumPage(
+  token: string,
+  options: { deviceId?: string | null; limit?: number; offset?: number } = {}
+): Promise<AlbumViewModel | null> {
+  const { deviceId, limit = MEDIA_PAGE_SIZE, offset = 0 } = options;
+  const resolved = await resolveToken(token);
+  if (!resolved) return null;
+  const { role, album } = resolved;
+
+  const supabase = getSupabaseAdmin();
+  const windows = computeWindows(album);
+
+  const [{ data: mediaRows, error }, { data: allSizes, error: sizesError }, { count: mediaTotal, error: countError }] =
+    await Promise.all([
+      supabase
+        .from('media')
+        .select('*')
+        .eq('album_id', album.id)
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1),
+      supabase.from('media').select('size_bytes').eq('album_id', album.id),
+      supabase.from('media').select('id', { count: 'exact', head: true }).eq('album_id', album.id),
+    ]);
+  if (error) throw error;
+  if (sizesError) throw sizesError;
+  if (countError) throw countError;
+
+  const storageUsedBytes = (allSizes ?? []).reduce((sum, row) => sum + Number(row.size_bytes), 0);
+  const media = await attachLikesAndUrls(mediaRows ?? [], album, windows.isArchived, deviceId);
+  const total = mediaTotal ?? media.length;
 
   return {
     role,
@@ -171,7 +215,13 @@ export async function getAlbumView(token: string, deviceId?: string | null): Pro
     canUpload: (role === 'organizer' || role === 'moderator' || role === 'contributor') && windows.uploadOpen,
     canModerate: role === 'organizer' || role === 'moderator',
     media,
+    mediaTotal: total,
+    hasMore: offset + media.length < total,
   };
+}
+
+export async function getAlbumView(token: string, deviceId?: string | null): Promise<AlbumViewModel | null> {
+  return getAlbumPage(token, { deviceId });
 }
 
 export interface CreateAlbumInput {
@@ -220,6 +270,8 @@ export interface RequestUploadUrlInput {
   contentType: string;
   sizeBytes: number;
   durationSeconds?: number;
+  width?: number;
+  height?: number;
   uploaderLabel?: string;
   /**
    * Id anónimo generado en el navegador de quien sube (ver components/AlbumWorkspace.tsx).
@@ -279,6 +331,8 @@ export async function requestUploadUrl(
       content_type: input.contentType,
       size_bytes: input.sizeBytes,
       duration_seconds: input.durationSeconds ?? null,
+      width: input.width ?? null,
+      height: input.height ?? null,
       uploaded_by_token: token,
       uploader_device_id: input.uploaderDeviceId ?? null,
       uploader_label: input.uploaderLabel ?? null,

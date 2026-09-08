@@ -35,13 +35,20 @@ create table if not exists media (
   content_type text not null,
   size_bytes bigint not null,
   duration_seconds numeric,
+  width int,
+  height int,
   uploaded_by_token text references album_tokens(token) on delete set null,
   uploader_device_id text, -- id anónimo generado en el navegador de quien subió (ver lib/albums.ts)
   uploader_label text,
   created_at timestamptz not null default now()
 );
 
+-- Por si esta tabla ya existía de una versión anterior sin estas columnas:
+alter table media add column if not exists width int;
+alter table media add column if not exists height int;
+
 create index if not exists media_album_id_idx on media(album_id);
+create index if not exists media_album_created_idx on media(album_id, created_at desc);
 
 create table if not exists media_likes (
   media_id uuid not null references media(id) on delete cascade,

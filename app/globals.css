@@ -28,3 +28,26 @@ body {
   font-style: italic;
 }
 
+/* Mismo serif que .font-display pero sin itálica — para títulos de contenido
+   (ej. el nombre del evento dentro de un álbum), donde la itálica del logo
+   queda demasiado decorativa. La itálica se reserva para la marca "Vívido". */
+.font-serif-title {
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-style: normal;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(90deg, #e9e2d6 25%, #f3ede2 37%, #e9e2d6 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+

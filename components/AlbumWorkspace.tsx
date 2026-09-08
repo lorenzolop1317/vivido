@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AlbumViewModel } from '@/lib/albums';
+import type { AlbumViewModel, MediaItem } from '@/lib/albums';
 
 const DEVICE_ID_KEY = 'event-album:device-id';
+const PAGE_SIZE = 30;
 
 function getOrCreateDeviceId(): string {
   if (typeof window === 'undefined') return '';
@@ -32,13 +33,25 @@ function formatDate(iso: string | null) {
   return new Date(iso).toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-function readVideoDuration(file: File): Promise<number> {
+function readImageDimensions(file: File): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const img = new window.Image();
+    img.onload = () => {
+      URL.revokeObjectURL(img.src);
+      resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    };
+    img.onerror = () => reject(new Error('No se pudo leer la imagen.'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+function readVideoMeta(file: File): Promise<{ duration: number; width: number; height: number }> {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video');
     video.preload = 'metadata';
     video.onloadedmetadata = () => {
       URL.revokeObjectURL(video.src);
-      resolve(video.duration);
+      resolve({ duration: video.duration, width: video.videoWidth, height: video.videoHeight });
     };
     video.onerror = () => reject(new Error('No se pudo leer el video.'));
     video.src = URL.createObjectURL(file);
@@ -129,10 +142,30 @@ interface UploadSummary {
   errors: number;
 }
 type UploadStage = 'idle' | 'uploading' | 'summary';
-type MediaItem = AlbumViewModel['media'][number];
+
+interface AlbumMeta {
+  role: AlbumViewModel['role'];
+  album: AlbumViewModel['album'];
+  windows: AlbumViewModel['windows'];
+  storageUsedBytes: number;
+  canUpload: boolean;
+  canModerate: boolean;
+  mediaTotal: number;
+}
 
 export default function AlbumWorkspace({ token, initialView }: { token: string; initialView: AlbumViewModel }) {
-  const [view, setView] = useState(initialView);
+  const [meta, setMeta] = useState<AlbumMeta>({
+    role: initialView.role,
+    album: initialView.album,
+    windows: initialView.windows,
+    storageUsedBytes: initialView.storageUsedBytes,
+    canUpload: initialView.canUpload,
+    canModerate: initialView.canModerate,
+    mediaTotal: initialView.mediaTotal,
+  });
+  const [mediaItems, setMediaItems] = useState<MediaItem[]>(initialView.media);
+  const [hasMore, setHasMore] = useState(initialView.hasMore);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [deviceId, setDeviceId] = useState('');
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [uploadStage, setUploadStage] = useState<UploadStage>('idle');
@@ -141,20 +174,80 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
+  async function fetchPage(offset: number, limit: number, explicitDeviceId?: string): Promise<AlbumViewModel | null> {
+    const id = explicitDeviceId ?? deviceId;
+    const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+    if (id) params.set('deviceId', id);
+    const res = await fetch(`/api/albums/${token}?${params.toString()}`, { cache: 'no-store' });
+    if (!res.ok) return null;
+    return res.json();
+  }
+
+  // Al montar: identificamos el dispositivo y volvemos a pedir la primera
+  // página ya con ese id, para que los likes/"lo mío" queden correctos
+  // (en el render del servidor todavía no lo conocíamos).
   useEffect(() => {
     const id = getOrCreateDeviceId();
     setDeviceId(id);
-    refreshView(id);
+    fetchPage(0, Math.max(initialView.media.length, PAGE_SIZE), id).then((data) => {
+      if (!data) return;
+      setMeta({
+        role: data.role,
+        album: data.album,
+        windows: data.windows,
+        storageUsedBytes: data.storageUsedBytes,
+        canUpload: data.canUpload,
+        canModerate: data.canModerate,
+        mediaTotal: data.mediaTotal,
+      });
+      setMediaItems(data.media);
+      setHasMore(data.hasMore);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function refreshView(explicitDeviceId?: string) {
-    const id = explicitDeviceId ?? deviceId;
-    const qs = id ? `?deviceId=${encodeURIComponent(id)}` : '';
-    const res = await fetch(`/api/albums/${token}${qs}`, { cache: 'no-store' });
-    if (res.ok) setView(await res.json());
-  }
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    const data = await fetchPage(mediaItems.length, PAGE_SIZE);
+    if (data) {
+      setMediaItems((prev) => [...prev, ...data.media]);
+      setHasMore(data.hasMore);
+      setMeta((prev) => ({ ...prev, storageUsedBytes: data.storageUsedBytes, mediaTotal: data.mediaTotal }));
+    }
+    setLoadingMore(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadingMore, hasMore, mediaItems.length, deviceId, token]);
+
+  // Scroll infinito: cuando el "centinela" al final de la grilla entra en
+  // pantalla, pedimos la próxima tanda de fotos.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) loadMore();
+      },
+      { rootMargin: '800px' }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [loadMore]);
+
+  // Aviso antes de salir mientras hay una subida en curso, para no perder
+  // el progreso por un "atrás" o un cierre accidental de la pestaña.
+  useEffect(() => {
+    const hasActiveUpload = uploads.some((u) => u.status === 'uploading');
+    if (!hasActiveUpload) return;
+    function handler(e: BeforeUnloadEvent) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [uploads]);
 
   async function handleFiles(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
@@ -172,8 +265,20 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
       const file = files[i];
       try {
         let durationSeconds: number | undefined;
+        let width: number | undefined;
+        let height: number | undefined;
+
         if (file.type.startsWith('video/')) {
-          durationSeconds = await readVideoDuration(file);
+          const meta = await readVideoMeta(file);
+          durationSeconds = meta.duration;
+          width = meta.width || undefined;
+          height = meta.height || undefined;
+        } else {
+          const dims = await readImageDimensions(file).catch(() => null);
+          if (dims) {
+            width = dims.width;
+            height = dims.height;
+          }
         }
 
         const urlRes = await fetch(`/api/albums/${token}/upload-url`, {
@@ -183,6 +288,8 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
             contentType: file.type,
             sizeBytes: file.size,
             durationSeconds,
+            width,
+            height,
             uploaderDeviceId: deviceId,
           }),
         });
@@ -206,7 +313,20 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
       }
     }
 
-    await refreshView();
+    const uploadedCount = photos + videos;
+    if (uploadedCount > 0) {
+      const fresh = await fetchPage(0, uploadedCount);
+      if (fresh) {
+        setMediaItems((prev) => {
+          const newIds = new Set(fresh.media.map((m) => m.id));
+          const merged = [...fresh.media, ...prev.filter((m) => !newIds.has(m.id))];
+          setHasMore(fresh.mediaTotal > merged.length);
+          return merged;
+        });
+        setMeta((prev) => ({ ...prev, storageUsedBytes: fresh.storageUsedBytes, mediaTotal: fresh.mediaTotal }));
+      }
+    }
+
     setUploadSummary({ photos, videos, errors });
     setUploadStage('summary');
   }
@@ -234,23 +354,24 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
       return;
     }
     setLightboxIndex(null);
-    await refreshView();
+    setMediaItems((prev) => prev.filter((m) => m.id !== mediaId));
+    setMeta((prev) => ({ ...prev, mediaTotal: Math.max(0, prev.mediaTotal - 1) }));
   }
 
   async function handleClose() {
     if (!confirm('¿Cerrar el álbum? No se van a poder subir más fotos ni videos.')) return;
     const res = await fetch(`/api/albums/${token}/close`, { method: 'POST' });
-    if (res.ok) await refreshView();
+    if (res.ok) {
+      const data = await fetchPage(0, mediaItems.length || PAGE_SIZE);
+      if (data) setMeta((prev) => ({ ...prev, windows: data.windows, album: data.album }));
+    }
   }
 
   async function handleToggleLike(mediaId: string) {
     if (!deviceId) return;
-    setView((prev) => ({
-      ...prev,
-      media: prev.media.map((m) =>
-        m.id === mediaId ? { ...m, likedByMe: !m.likedByMe, likeCount: m.likeCount + (m.likedByMe ? -1 : 1) } : m
-      ),
-    }));
+    setMediaItems((prev) =>
+      prev.map((m) => (m.id === mediaId ? { ...m, likedByMe: !m.likedByMe, likeCount: m.likeCount + (m.likedByMe ? -1 : 1) } : m))
+    );
     try {
       const res = await fetch(`/api/media/${mediaId}/like`, {
         method: 'POST',
@@ -259,20 +380,17 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
       });
       if (res.ok) {
         const data = await res.json();
-        setView((prev) => ({
-          ...prev,
-          media: prev.media.map((m) => (m.id === mediaId ? { ...m, likedByMe: data.liked, likeCount: data.likeCount } : m)),
-        }));
+        setMediaItems((prev) => prev.map((m) => (m.id === mediaId ? { ...m, likedByMe: data.liked, likeCount: data.likeCount } : m)));
       }
     } catch {
       // si falla la red, dejamos el estado optimista tal cual — no es crítico para un like
     }
   }
 
-  const { album, role, windows, storageUsedBytes, canUpload, canModerate, media } = view;
+  const { album, role, windows, storageUsedBytes, canUpload, canModerate, mediaTotal } = meta;
   const storagePercent = Math.min(100, (storageUsedBytes / album.storage_limit_bytes) * 100);
   const uploadAvailable = canUpload && windows.uploadOpen;
-  const showInlineCta = media.length === 0 && uploadAvailable && !modalOpen;
+  const showInlineCta = mediaTotal === 0 && uploadAvailable && !modalOpen;
 
   return (
     <main className="mx-auto min-h-screen max-w-5xl px-4 py-8 sm:px-6">
@@ -295,7 +413,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
 
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="font-display text-3xl italic text-brand-dark">{album.name}</h1>
+          <h1 className="font-serif-title text-3xl text-brand-dark">{album.name}</h1>
           <p className="text-sm text-gray-500">
             {[formatDate(album.event_date), album.location].filter(Boolean).join(' · ') || 'Sin fecha/lugar'}
           </p>
@@ -304,7 +422,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
           </p>
         </div>
 
-        {media.length > 0 && uploadAvailable && (
+        {mediaTotal > 0 && uploadAvailable && (
           <button
             onClick={() => {
               setModalOpen(true);
@@ -362,7 +480,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
 
       {showInlineCta && (
         <div className="mb-8 rounded-2xl border border-dashed border-brand/30 bg-white/70 px-6 py-10 text-center">
-          <p className="font-display text-2xl italic text-brand-dark">Todavía no hay fotos ni videos</p>
+          <p className="font-serif-title text-2xl text-brand-dark">Todavía no hay fotos ni videos</p>
           <p className="mx-auto mt-1 max-w-sm text-sm text-gray-500">
             Sé el/la primero/a en sumar un recuerdo de este evento. Cualquiera con este enlace puede subir.
           </p>
@@ -373,86 +491,49 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
         </div>
       )}
 
-      {media.length > 0 && (
+      {mediaTotal > 0 && (
         <p className="mb-3 text-xs uppercase tracking-wide text-gray-400">
-          {media.length} {media.length === 1 ? 'momento' : 'momentos'} · tocá una foto para verla en grande
+          {mediaTotal} {mediaTotal === 1 ? 'momento' : 'momentos'} · tocá una foto para verla en grande
         </p>
       )}
 
       <div className="columns-2 gap-3 sm:columns-3 sm:gap-4">
-        {media.map((item, index) => {
+        {mediaItems.map((item, index) => {
           const canDelete = canModerate || item.uploader_device_id === deviceId;
           return (
-            <div
+            <Thumbnail
               key={item.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => setLightboxIndex(index)}
-              onKeyDown={(e) => e.key === 'Enter' && setLightboxIndex(index)}
-              className="group relative mb-3 block w-full cursor-zoom-in overflow-hidden rounded-xl bg-gray-100 shadow-sm sm:mb-4"
-            >
-              {item.kind === 'photo' ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={item.viewUrl}
-                  alt=""
-                  loading="lazy"
-                  className="block h-auto w-full object-cover transition duration-300 ease-out group-hover:scale-[1.03]"
-                />
-              ) : (
-                <div className="relative">
-                  <video src={item.viewUrl} muted preload="metadata" className="block h-auto w-full object-cover" />
-                  <span className="absolute inset-0 flex items-center justify-center">
-                    <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm transition group-hover:scale-110">
-                      ▶
-                    </span>
-                  </span>
-                </div>
-              )}
-              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent opacity-0 transition group-hover:opacity-100" />
-
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleToggleLike(item.id);
-                }}
-                className={`absolute bottom-2 left-2 flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium backdrop-blur-sm transition ${
-                  item.likedByMe ? 'bg-brand text-white' : 'bg-black/45 text-white hover:bg-black/60'
-                }`}
-              >
-                <HeartIcon className="h-3.5 w-3.5" filled={item.likedByMe} />
-                {item.likeCount > 0 && item.likeCount}
-              </button>
-
-              {canDelete && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (confirm('¿Borrar esta foto/video?')) handleDelete(item.id);
-                  }}
-                  className="absolute right-2 top-2 rounded-full bg-black/60 px-2.5 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100"
-                >
-                  Borrar
-                </button>
-              )}
-            </div>
+              item={item}
+              canDelete={canDelete}
+              onOpen={() => setLightboxIndex(index)}
+              onToggleLike={() => handleToggleLike(item.id)}
+              onDelete={() => {
+                if (confirm('¿Borrar esta foto/video?')) handleDelete(item.id);
+              }}
+            />
           );
         })}
       </div>
 
-      {media.length === 0 && !windows.isArchived && !uploadAvailable && (
+      {(hasMore || loadingMore) && (
+        <div ref={sentinelRef} className="flex justify-center py-8">
+          <Spinner className="h-6 w-6 text-brand/60" />
+        </div>
+      )}
+
+      {mediaTotal === 0 && !windows.isArchived && !uploadAvailable && (
         <p className="mt-8 text-center text-sm text-gray-400">Todavía no hay fotos ni videos en este álbum.</p>
       )}
 
       {lightboxIndex !== null && (
         <Lightbox
-          media={media}
+          media={mediaItems}
           index={lightboxIndex}
           onClose={() => setLightboxIndex(null)}
           onNavigate={setLightboxIndex}
           onToggleLike={handleToggleLike}
           onDelete={
-            canModerate || media[lightboxIndex]?.uploader_device_id === deviceId ? handleDelete : undefined
+            canModerate || mediaItems[lightboxIndex]?.uploader_device_id === deviceId ? handleDelete : undefined
           }
         />
       )}
@@ -468,6 +549,95 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
         />
       )}
     </main>
+  );
+}
+
+/* ---------- Miniatura con proporción fija + loader propio (sin "saltos") ---------- */
+
+function Thumbnail({
+  item,
+  canDelete,
+  onOpen,
+  onToggleLike,
+  onDelete,
+}: {
+  item: MediaItem;
+  canDelete: boolean;
+  onOpen: () => void;
+  onToggleLike: () => void;
+  onDelete: () => void;
+}) {
+  const [loaded, setLoaded] = useState(false);
+  const ratio = item.width && item.height ? `${item.width} / ${item.height}` : '4 / 3';
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => e.key === 'Enter' && onOpen()}
+      style={{ aspectRatio: ratio }}
+      className="group relative mb-3 block w-full cursor-zoom-in overflow-hidden rounded-xl bg-gray-100 shadow-sm sm:mb-4"
+    >
+      <div className={`skeleton-shimmer absolute inset-0 transition-opacity duration-300 ${loaded ? 'opacity-0' : 'opacity-100'}`} />
+
+      {item.kind === 'photo' ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={item.viewUrl}
+          alt=""
+          loading="lazy"
+          onLoad={() => setLoaded(true)}
+          className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ease-out group-hover:scale-[1.03] ${
+            loaded ? 'opacity-100' : 'opacity-0'
+          }`}
+        />
+      ) : (
+        <>
+          <video
+            src={item.viewUrl}
+            muted
+            preload="metadata"
+            onLoadedData={() => setLoaded(true)}
+            className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+          />
+          {loaded && (
+            <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm transition group-hover:scale-110">
+                ▶
+              </span>
+            </span>
+          )}
+        </>
+      )}
+
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent opacity-0 transition group-hover:opacity-100" />
+
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleLike();
+        }}
+        className={`absolute bottom-2 left-2 flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium backdrop-blur-sm transition sm:px-3.5 sm:py-2 sm:text-sm ${
+          item.likedByMe ? 'bg-brand text-white' : 'bg-black/45 text-white hover:bg-black/60'
+        }`}
+      >
+        <HeartIcon className="h-3.5 w-3.5 sm:h-5 sm:w-5" filled={item.likedByMe} />
+        {item.likeCount > 0 && item.likeCount}
+      </button>
+
+      {canDelete && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          className="absolute right-2 top-2 rounded-full bg-black/60 px-2.5 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100"
+        >
+          Borrar
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -521,12 +691,9 @@ function UploadModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
       onClick={() => canClose && onClose()}
     >
-      <div
-        className="w-full max-w-sm rounded-2xl bg-paper p-6 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="w-full max-w-sm rounded-2xl bg-paper p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-display text-xl italic text-brand-dark">
+          <h2 className="font-serif-title text-xl text-brand-dark">
             {stage === 'idle' && 'Sumar al álbum'}
             {stage === 'uploading' && 'Subiendo…'}
             {stage === 'summary' && '¡Listo!'}
@@ -582,10 +749,7 @@ function UploadModal({
                 {summary.errors} {summary.errors === 1 ? 'archivo falló' : 'archivos fallaron'}.
               </p>
             )}
-            <button
-              onClick={onClose}
-              className="mt-5 w-full rounded-lg bg-brand py-2.5 text-sm font-semibold text-white hover:bg-brand-dark"
-            >
+            <button onClick={onClose} className="mt-5 w-full rounded-lg bg-brand py-2.5 text-sm font-semibold text-white hover:bg-brand-dark">
               Volver al álbum
             </button>
           </div>
@@ -613,6 +777,7 @@ function Lightbox({
   onDelete?: (mediaId: string) => void;
 }) {
   const item = media[index];
+  const [loaded, setLoaded] = useState(false);
 
   const goTo = useCallback(
     (delta: number) => {
@@ -621,6 +786,10 @@ function Lightbox({
     },
     [index, media.length, onNavigate]
   );
+
+  useEffect(() => {
+    setLoaded(false);
+  }, [index]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -639,10 +808,13 @@ function Lightbox({
   if (!item) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-sm"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-sm" onClick={onClose}>
+      {!loaded && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <Spinner className="h-10 w-10 text-white/60" />
+        </div>
+      )}
+
       <button
         onClick={onClose}
         aria-label="Cerrar"
@@ -676,23 +848,26 @@ function Lightbox({
         </>
       )}
 
-      <div
-        className="flex max-h-[85vh] max-w-[92vw] flex-col items-center gap-4"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="relative z-[1] flex max-h-[85vh] max-w-[92vw] flex-col items-center gap-4" onClick={(e) => e.stopPropagation()}>
         {item.kind === 'photo' ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={item.viewUrl}
             alt=""
-            className="max-h-[75vh] max-w-[92vw] rounded-lg object-contain shadow-2xl"
+            onLoad={() => setLoaded(true)}
+            className={`max-h-[75vh] max-w-[92vw] rounded-lg object-contain shadow-2xl transition-opacity duration-200 ${
+              loaded ? 'opacity-100' : 'opacity-0'
+            }`}
           />
         ) : (
           <video
             src={item.viewUrl}
             controls
             autoPlay
-            className="max-h-[75vh] max-w-[92vw] rounded-lg object-contain shadow-2xl"
+            onLoadedData={() => setLoaded(true)}
+            className={`max-h-[75vh] max-w-[92vw] rounded-lg object-contain shadow-2xl transition-opacity duration-200 ${
+              loaded ? 'opacity-100' : 'opacity-0'
+            }`}
           />
         )}
 

@@ -47,6 +47,25 @@ export async function createViewUrl(key: string) {
 }
 
 /**
+ * URL para MOSTRAR una foto/video (no para forzar descarga). Si el bucket tiene
+ * configurada una "Public Development URL" (o dominio propio) en Cloudflare —
+ * R2_PUBLIC_URL —, usamos esa: es siempre la MISMA url para el mismo archivo,
+ * así el navegador (y el cache de Cloudflare) la puede reusar entre visitas en
+ * vez de volver a descargarla cada vez. Las claves son UUIDs, no adivinables,
+ * así que es el mismo modelo de "quien tiene el link, tiene acceso" que ya usa
+ * el resto de la app (ver los tokens de álbum) — no queda listado ni indexado.
+ * Si no está configurada esa variable, seguimos usando la URL firmada de
+ * siempre (funciona igual, solo que no se puede cachear entre visitas).
+ */
+export async function getViewUrl(key: string) {
+  const publicBase = process.env.R2_PUBLIC_URL;
+  if (publicBase) {
+    return `${publicBase.replace(/\/$/, '')}/${key}`;
+  }
+  return createViewUrl(key);
+}
+
+/**
  * Igual que createViewUrl, pero le pide a R2 que responda con
  * Content-Disposition: attachment. Así un <a href="..."> normal dispara una
  * descarga real (con el nombre de archivo elegido) en vez de abrir la imagen
