@@ -1,9 +1,12 @@
-# Álbum de Evento — MVP
+# Vívido — MVP
 
-Nombre de trabajo temporal (falta el branding real). Código fuente del MVP descripto en el
-documento de producto: álbum colaborativo post-evento, sin login para los invitados, PWA
-instalable, plan gratis con límites (3 GB por álbum, video hasta 60s, 14 días de ventana de
-subida, 30 días de retención total).
+Código fuente del MVP descripto en el documento de producto: álbum colaborativo post-evento,
+sin login para los invitados, PWA instalable, plan gratis con límites (3 GB por álbum, video
+hasta 60s, 14 días de ventana de subida, 30 días de retención total).
+
+Marca ya aplicada (ver el brand board del proyecto para el set completo): mark "esquinero en V"
+(`public/icons/`), paleta Flash/Negativo/Papel/Tinta (`app/globals.css`) y tipografía
+Instrument Serif + Caveat + Plus Jakarta Sans (`app/layout.tsx`).
 
 ## Cómo está armado
 
@@ -98,14 +101,14 @@ Abrir `http://localhost:3000`, crear un álbum de prueba y probar el flujo compl
 - **PWA**: instalable ("agregar a inicio") desde el día uno. Todavía no tiene cola de subida
   offline (guardar la foto si se corta la conexión y reintentar sola) — quedó anotado como
   mejora de fase 2, no bloquea el uso normal con buena señal.
-- **Íconos**: `public/icons/icon-192.png` y `icon-512.png` son placeholders genéricos —
-  reemplazar por los reales apenas haya branding definido.
+- **Íconos**: `public/icons/icon-192.png` y `icon-512.png` ya son la marca real (el esquinero
+  en V sobre plum). Si el mark se retoca más adelante, regenerarlos desde el mismo SVG del
+  brand board para que quede pixel-perfect.
 - **Plan pago**: el esquema y el código ya distinguen `plan: 'free' | 'pro'` y dejan lugar
   para el rol de co-moderador, pero todavía no hay integración de Stripe ni pantalla de
   upgrade — se agrega cuando se decida activar la monetización.
 
 ## Costos mientras se prueba
-
 
 Con 3-4 álbumes de prueba a full, todo entra dentro de las capas gratuitas de Supabase,
 Cloudflare R2 y Vercel (ver el documento de producto para el detalle de por qué y cuándo

@@ -1,8 +1,15 @@
 @import "tailwindcss";
 
+/*
+ * Paleta e identidad "Vívido" (ver el brand board para el detalle completo).
+ * brand       -> Negativo (acento: CTA, progreso de subida, marca)
+ * brand-dark  -> Flash (fondos fuertes, botones primarios, header)
+ */
 @theme {
-  --color-brand: #7c3aed;
-  --color-brand-dark: #5b21b6;
+  --color-brand: #d6491f;
+  --color-brand-dark: #5b2a54;
+  --color-paper: #f6efe4;
+  --color-ink: #2a2019;
 }
 
 html,
@@ -11,6 +18,13 @@ body {
 }
 
 body {
-  background-color: #faf9fb;
-  color: #1f1233;
+  background-color: #f6efe4; /* papel */
+  color: #2a2019; /* tinta */
+  font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
 }
+
+.font-display {
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-style: italic;
+}
+
