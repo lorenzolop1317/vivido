@@ -45,30 +45,114 @@ function readVideoDuration(file: File): Promise<number> {
   });
 }
 
-type UploadStatus = 'pending' | 'uploading' | 'done' | 'error';
+/* ---------- Íconos (SVG a mano, sin librerías externas) ---------- */
+
+function CameraIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={className}>
+      <path d="M4 8.5a1.5 1.5 0 0 1 1.5-1.5h1.65a1.5 1.5 0 0 0 1.28-.72l.7-1.14A1.5 1.5 0 0 1 10.4 4.5h3.2a1.5 1.5 0 0 1 1.27.72l.7 1.14a1.5 1.5 0 0 0 1.28.72H18.5A1.5 1.5 0 0 1 20 8.5v9A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5v-9Z" strokeLinejoin="round" />
+      <circle cx="12" cy="12.5" r="3.4" />
+    </svg>
+  );
+}
+
+function ImagesIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={className}>
+      <rect x="3.5" y="6.5" width="13" height="13" rx="2" />
+      <path d="M7.5 6.5V5A1.5 1.5 0 0 1 9 3.5h9A1.5 1.5 0 0 1 19.5 5v9a1.5 1.5 0 0 1-1.5 1.5h-1.5" />
+      <circle cx="8" cy="11" r="1.3" />
+      <path d="M5 17.5l3-3.2a1.4 1.4 0 0 1 2 0l1 1.05 2.5-2.7a1.4 1.4 0 0 1 2.05.02L18 15.5" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function HeartIcon({ className, filled }: { className?: string; filled?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.7" className={className}>
+      <path
+        d="M12 20s-6.7-4.03-9.3-8.24C1.06 9.2 1.9 5.9 4.98 4.86c2-.67 3.86.1 5.02 1.6l2 2.6 2-2.6c1.16-1.5 3.02-2.27 5.02-1.6 3.08 1.04 3.92 4.34 2.28 6.9C18.7 15.97 12 20 12 20Z"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function DownloadIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M12 4v10.5" strokeLinecap="round" />
+      <path d="M7.5 11.5 12 16l4.5-4.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 18.5h14" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function XIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M6 6l12 12M18 6 6 18" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className}>
+      <path d="m5 13 4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function Spinner({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={`animate-spin ${className ?? ''}`}>
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2.2" strokeOpacity="0.25" />
+      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/* ---------- Tipos ---------- */
+
+type UploadStatus = 'uploading' | 'done' | 'error';
 interface UploadItem {
   key: string;
   name: string;
   status: UploadStatus;
   error?: string;
 }
-
+interface UploadSummary {
+  photos: number;
+  videos: number;
+  errors: number;
+}
+type UploadStage = 'idle' | 'uploading' | 'summary';
 type MediaItem = AlbumViewModel['media'][number];
 
 export default function AlbumWorkspace({ token, initialView }: { token: string; initialView: AlbumViewModel }) {
   const [view, setView] = useState(initialView);
   const [deviceId, setDeviceId] = useState('');
   const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const [uploadStage, setUploadStage] = useState<UploadStage>('idle');
+  const [uploadSummary, setUploadSummary] = useState<UploadSummary | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setDeviceId(getOrCreateDeviceId());
+    const id = getOrCreateDeviceId();
+    setDeviceId(id);
+    refreshView(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function refreshView() {
-    const res = await fetch(`/api/albums/${token}`, { cache: 'no-store' });
+  async function refreshView(explicitDeviceId?: string) {
+    const id = explicitDeviceId ?? deviceId;
+    const qs = id ? `?deviceId=${encodeURIComponent(id)}` : '';
+    const res = await fetch(`/api/albums/${token}${qs}`, { cache: 'no-store' });
     if (res.ok) setView(await res.json());
   }
 
@@ -76,10 +160,16 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
     if (!fileList || fileList.length === 0) return;
     const files = Array.from(fileList);
 
-    for (const file of files) {
-      const itemKey = `${file.name}-${file.size}-${Date.now()}`;
-      setUploads((prev) => [...prev, { key: itemKey, name: file.name, status: 'uploading' }]);
+    setModalOpen(true);
+    setUploadStage('uploading');
+    setUploads(files.map((f) => ({ key: `${f.name}-${f.size}-${Date.now()}-${Math.random()}`, name: f.name, status: 'uploading' as const })));
 
+    let photos = 0;
+    let videos = 0;
+    let errors = 0;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
       try {
         let durationSeconds: number | undefined;
         if (file.type.startsWith('video/')) {
@@ -106,14 +196,34 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
         });
         if (!putRes.ok) throw new Error('Falló la subida a almacenamiento.');
 
-        setUploads((prev) => prev.map((u) => (u.key === itemKey ? { ...u, status: 'done' } : u)));
+        setUploads((prev) => prev.map((u, idx) => (idx === i ? { ...u, status: 'done' } : u)));
+        if (file.type.startsWith('video/')) videos += 1;
+        else photos += 1;
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Error inesperado.';
-        setUploads((prev) => prev.map((u) => (u.key === itemKey ? { ...u, status: 'error', error: message } : u)));
+        setUploads((prev) => prev.map((u, idx) => (idx === i ? { ...u, status: 'error', error: message } : u)));
+        errors += 1;
       }
     }
 
     await refreshView();
+    setUploadSummary({ photos, videos, errors });
+    setUploadStage('summary');
+  }
+
+  function closeUploadModal() {
+    setModalOpen(false);
+    setUploadStage('idle');
+    setUploads([]);
+    setUploadSummary(null);
+  }
+
+  function triggerCamera() {
+    cameraInputRef.current?.click();
+  }
+
+  function triggerGallery() {
+    galleryInputRef.current?.click();
   }
 
   async function handleDelete(mediaId: string) {
@@ -133,19 +243,79 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
     if (res.ok) await refreshView();
   }
 
+  async function handleToggleLike(mediaId: string) {
+    if (!deviceId) return;
+    setView((prev) => ({
+      ...prev,
+      media: prev.media.map((m) =>
+        m.id === mediaId ? { ...m, likedByMe: !m.likedByMe, likeCount: m.likeCount + (m.likedByMe ? -1 : 1) } : m
+      ),
+    }));
+    try {
+      const res = await fetch(`/api/media/${mediaId}/like`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setView((prev) => ({
+          ...prev,
+          media: prev.media.map((m) => (m.id === mediaId ? { ...m, likedByMe: data.liked, likeCount: data.likeCount } : m)),
+        }));
+      }
+    } catch {
+      // si falla la red, dejamos el estado optimista tal cual — no es crítico para un like
+    }
+  }
+
   const { album, role, windows, storageUsedBytes, canUpload, canModerate, media } = view;
   const storagePercent = Math.min(100, (storageUsedBytes / album.storage_limit_bytes) * 100);
+  const uploadAvailable = canUpload && windows.uploadOpen;
+  const showInlineCta = media.length === 0 && uploadAvailable && !modalOpen;
 
   return (
     <main className="mx-auto min-h-screen max-w-5xl px-4 py-8 sm:px-6">
-      <header className="mb-6">
-        <h1 className="font-display text-3xl italic text-brand-dark">{album.name}</h1>
-        <p className="text-sm text-gray-500">
-          {[formatDate(album.event_date), album.location].filter(Boolean).join(' · ') || 'Sin fecha/lugar'}
-        </p>
-        <p className="mt-1 text-xs uppercase tracking-wide text-gray-400">
-          Tu rol: {role === 'organizer' ? 'Organizador' : role === 'moderator' ? 'Moderador' : role === 'contributor' ? 'Invitado (podés subir)' : 'Solo ver'}
-        </p>
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*,video/*"
+        capture="environment"
+        className="hidden"
+        onChange={(e) => handleFiles(e.target.files)}
+      />
+      <input
+        ref={galleryInputRef}
+        type="file"
+        accept="image/*,video/*"
+        multiple
+        className="hidden"
+        onChange={(e) => handleFiles(e.target.files)}
+      />
+
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="font-display text-3xl italic text-brand-dark">{album.name}</h1>
+          <p className="text-sm text-gray-500">
+            {[formatDate(album.event_date), album.location].filter(Boolean).join(' · ') || 'Sin fecha/lugar'}
+          </p>
+          <p className="mt-1 text-xs uppercase tracking-wide text-gray-400">
+            Tu rol: {role === 'organizer' ? 'Organizador' : role === 'moderator' ? 'Moderador' : role === 'contributor' ? 'Invitado (podés subir)' : 'Solo ver'}
+          </p>
+        </div>
+
+        {media.length > 0 && uploadAvailable && (
+          <button
+            onClick={() => {
+              setModalOpen(true);
+              setUploadStage('idle');
+            }}
+            className="flex items-center gap-2 rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-dark hover:shadow-md"
+          >
+            <ImagesIcon className="h-4 w-4" />
+            Cargar más fotos
+          </button>
+        )}
       </header>
 
       {windows.isArchived ? (
@@ -171,50 +341,6 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
         </div>
       )}
 
-      {canUpload && (
-        <div className="mb-6 flex gap-3">
-          <button
-            onClick={() => cameraInputRef.current?.click()}
-            className="flex-1 rounded-lg bg-brand py-2.5 text-sm font-semibold text-white hover:bg-brand-dark"
-          >
-            📷 Sacar foto/video
-          </button>
-          <button
-            onClick={() => galleryInputRef.current?.click()}
-            className="flex-1 rounded-lg border border-brand py-2.5 text-sm font-semibold text-brand hover:bg-purple-50"
-          >
-            🖼️ Subir de la galería
-          </button>
-          <input
-            ref={cameraInputRef}
-            type="file"
-            accept="image/*,video/*"
-            capture="environment"
-            className="hidden"
-            onChange={(e) => handleFiles(e.target.files)}
-          />
-          <input
-            ref={galleryInputRef}
-            type="file"
-            accept="image/*,video/*"
-            multiple
-            className="hidden"
-            onChange={(e) => handleFiles(e.target.files)}
-          />
-        </div>
-      )}
-
-      {uploads.length > 0 && (
-        <ul className="mb-6 space-y-1 text-xs">
-          {uploads.map((u) => (
-            <li key={u.key} className={u.status === 'error' ? 'text-red-600' : 'text-gray-500'}>
-              {u.name} —{' '}
-              {u.status === 'uploading' ? 'subiendo…' : u.status === 'done' ? 'listo ✓' : `error: ${u.error}`}
-            </li>
-          ))}
-        </ul>
-      )}
-
       {canModerate && !windows.isArchived && (
         <div className="mb-6 flex gap-3">
           <a
@@ -231,6 +357,19 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
               Cerrar álbum
             </button>
           )}
+        </div>
+      )}
+
+      {showInlineCta && (
+        <div className="mb-8 rounded-2xl border border-dashed border-brand/30 bg-white/70 px-6 py-10 text-center">
+          <p className="font-display text-2xl italic text-brand-dark">Todavía no hay fotos ni videos</p>
+          <p className="mx-auto mt-1 max-w-sm text-sm text-gray-500">
+            Sé el/la primero/a en sumar un recuerdo de este evento. Cualquiera con este enlace puede subir.
+          </p>
+          <div className="mx-auto mt-6 grid max-w-sm grid-cols-2 gap-3">
+            <UploadEntryButton variant="primary" icon={<CameraIcon className="h-7 w-7" />} label="Sacar foto o video" onClick={triggerCamera} />
+            <UploadEntryButton variant="secondary" icon={<ImagesIcon className="h-7 w-7" />} label="Elegir de la galería" onClick={triggerGallery} />
+          </div>
         </div>
       )}
 
@@ -270,7 +409,21 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
                   </span>
                 </div>
               )}
-              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/25 via-transparent to-transparent opacity-0 transition group-hover:opacity-100" />
+              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent opacity-0 transition group-hover:opacity-100" />
+
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleToggleLike(item.id);
+                }}
+                className={`absolute bottom-2 left-2 flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium backdrop-blur-sm transition ${
+                  item.likedByMe ? 'bg-brand text-white' : 'bg-black/45 text-white hover:bg-black/60'
+                }`}
+              >
+                <HeartIcon className="h-3.5 w-3.5" filled={item.likedByMe} />
+                {item.likeCount > 0 && item.likeCount}
+              </button>
+
               {canDelete && (
                 <button
                   onClick={(e) => {
@@ -287,7 +440,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
         })}
       </div>
 
-      {media.length === 0 && !windows.isArchived && (
+      {media.length === 0 && !windows.isArchived && !uploadAvailable && (
         <p className="mt-8 text-center text-sm text-gray-400">Todavía no hay fotos ni videos en este álbum.</p>
       )}
 
@@ -297,26 +450,166 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
           index={lightboxIndex}
           onClose={() => setLightboxIndex(null)}
           onNavigate={setLightboxIndex}
+          onToggleLike={handleToggleLike}
           onDelete={
             canModerate || media[lightboxIndex]?.uploader_device_id === deviceId ? handleDelete : undefined
           }
+        />
+      )}
+
+      {modalOpen && (
+        <UploadModal
+          stage={uploadStage}
+          uploads={uploads}
+          summary={uploadSummary}
+          onTriggerCamera={triggerCamera}
+          onTriggerGallery={triggerGallery}
+          onClose={closeUploadModal}
         />
       )}
     </main>
   );
 }
 
+/* ---------- Botones de subida (compartidos entre el CTA inline y el modal) ---------- */
+
+function UploadEntryButton({
+  variant,
+  icon,
+  label,
+  onClick,
+}: {
+  variant: 'primary' | 'secondary';
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  const base = 'flex flex-col items-center justify-center gap-2 rounded-2xl px-4 py-6 text-sm font-semibold transition shadow-sm hover:shadow-md active:scale-[0.98]';
+  const style =
+    variant === 'primary'
+      ? 'bg-brand text-white hover:bg-brand-dark'
+      : 'bg-white text-brand-dark ring-1 ring-inset ring-gray-200 hover:ring-brand/40';
+  return (
+    <button onClick={onClick} className={`${base} ${style}`}>
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+}
+
+/* ---------- Modal de subida: botones → progreso → resumen ---------- */
+
+function UploadModal({
+  stage,
+  uploads,
+  summary,
+  onTriggerCamera,
+  onTriggerGallery,
+  onClose,
+}: {
+  stage: UploadStage;
+  uploads: UploadItem[];
+  summary: UploadSummary | null;
+  onTriggerCamera: () => void;
+  onTriggerGallery: () => void;
+  onClose: () => void;
+}) {
+  const canClose = stage !== 'uploading';
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      onClick={() => canClose && onClose()}
+    >
+      <div
+        className="w-full max-w-sm rounded-2xl bg-paper p-6 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="font-display text-xl italic text-brand-dark">
+            {stage === 'idle' && 'Sumar al álbum'}
+            {stage === 'uploading' && 'Subiendo…'}
+            {stage === 'summary' && '¡Listo!'}
+          </h2>
+          {canClose && (
+            <button onClick={onClose} aria-label="Cerrar" className="rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+              <XIcon className="h-5 w-5" />
+            </button>
+          )}
+        </div>
+
+        {stage === 'idle' && (
+          <div className="grid grid-cols-2 gap-3">
+            <UploadEntryButton variant="primary" icon={<CameraIcon className="h-7 w-7" />} label="Sacar foto o video" onClick={onTriggerCamera} />
+            <UploadEntryButton variant="secondary" icon={<ImagesIcon className="h-7 w-7" />} label="Elegir de la galería" onClick={onTriggerGallery} />
+          </div>
+        )}
+
+        {stage === 'uploading' && (
+          <ul className="max-h-72 space-y-2 overflow-y-auto pr-1">
+            {uploads.map((u) => (
+              <li key={u.key} className="flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs">
+                {u.status === 'uploading' && <Spinner className="h-4 w-4 shrink-0 text-brand" />}
+                {u.status === 'done' && <CheckIcon className="h-4 w-4 shrink-0 text-green-600" />}
+                {u.status === 'error' && <XIcon className="h-4 w-4 shrink-0 text-red-500" />}
+                <span className={`truncate ${u.status === 'error' ? 'text-red-600' : 'text-gray-600'}`}>
+                  {u.name}
+                  {u.status === 'error' && u.error ? ` — ${u.error}` : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {stage === 'summary' && summary && (
+          <div className="text-center">
+            <p className="text-sm text-gray-600">
+              {summary.photos > 0 && (
+                <>
+                  {summary.photos} {summary.photos === 1 ? 'foto' : 'fotos'}
+                </>
+              )}
+              {summary.photos > 0 && summary.videos > 0 && ' y '}
+              {summary.videos > 0 && (
+                <>
+                  {summary.videos} {summary.videos === 1 ? 'video' : 'videos'}
+                </>
+              )}
+              {summary.photos + summary.videos > 0 ? ' subidos correctamente.' : 'No se subió nada.'}
+            </p>
+            {summary.errors > 0 && (
+              <p className="mt-1 text-sm text-red-600">
+                {summary.errors} {summary.errors === 1 ? 'archivo falló' : 'archivos fallaron'}.
+              </p>
+            )}
+            <button
+              onClick={onClose}
+              className="mt-5 w-full rounded-lg bg-brand py-2.5 text-sm font-semibold text-white hover:bg-brand-dark"
+            >
+              Volver al álbum
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Visor en popup (lightbox) ---------- */
+
 function Lightbox({
   media,
   index,
   onClose,
   onNavigate,
+  onToggleLike,
   onDelete,
 }: {
   media: MediaItem[];
   index: number;
   onClose: () => void;
   onNavigate: (index: number) => void;
+  onToggleLike: (mediaId: string) => void;
   onDelete?: (mediaId: string) => void;
 }) {
   const item = media[index];
@@ -353,9 +646,9 @@ function Lightbox({
       <button
         onClick={onClose}
         aria-label="Cerrar"
-        className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-xl text-white hover:bg-white/20"
+        className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
       >
-        ✕
+        <XIcon className="h-5 w-5" />
       </button>
 
       {media.length > 1 && (
@@ -403,19 +696,29 @@ function Lightbox({
           />
         )}
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <button
+            onClick={() => onToggleLike(item.id)}
+            className={`flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition ${
+              item.likedByMe ? 'bg-brand text-white' : 'bg-white/10 text-white hover:bg-white/20'
+            }`}
+          >
+            <HeartIcon className="h-4 w-4" filled={item.likedByMe} />
+            {item.likeCount > 0 ? item.likeCount : 'Me gusta'}
+          </button>
           <a
             href={item.downloadUrl}
-            className="rounded-full bg-white px-5 py-2 text-sm font-semibold text-brand-dark shadow hover:bg-white/90"
+            className="flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-sm font-semibold text-brand-dark shadow hover:bg-white/90"
           >
-            ⬇ Descargar
+            <DownloadIcon className="h-4 w-4" />
+            Descargar
           </a>
           {onDelete && (
             <button
               onClick={() => {
                 if (confirm('¿Borrar esta foto/video?')) onDelete(item.id);
               }}
-              className="rounded-full border border-white/30 px-5 py-2 text-sm font-medium text-white hover:bg-white/10"
+              className="rounded-full border border-white/30 px-4 py-2 text-sm font-medium text-white hover:bg-white/10"
             >
               Borrar
             </button>

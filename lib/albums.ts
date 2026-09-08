@@ -117,10 +117,10 @@ export interface AlbumViewModel {
   storageUsedBytes: number;
   canUpload: boolean;
   canModerate: boolean; // borrar cualquier contenido, cerrar álbum, exportar
-  media: Array<MediaRow & { viewUrl: string; downloadUrl: string }>;
+  media: Array<MediaRow & { viewUrl: string; downloadUrl: string; likeCount: number; likedByMe: boolean }>;
 }
 
-export async function getAlbumView(token: string): Promise<AlbumViewModel | null> {
+export async function getAlbumView(token: string, deviceId?: string | null): Promise<AlbumViewModel | null> {
   const resolved = await resolveToken(token);
   if (!resolved) return null;
   const { role, album } = resolved;
@@ -136,6 +136,21 @@ export async function getAlbumView(token: string): Promise<AlbumViewModel | null
   const windows = computeWindows(album);
   const storageUsedBytes = (mediaRows ?? []).reduce((sum, row) => sum + Number(row.size_bytes), 0);
 
+  const mediaIds = (mediaRows ?? []).map((row) => row.id);
+  const likeCounts = new Map<string, number>();
+  const likedByMeSet = new Set<string>();
+  if (mediaIds.length > 0) {
+    const { data: likeRows, error: likesError } = await supabase
+      .from('media_likes')
+      .select('media_id, device_id')
+      .in('media_id', mediaIds);
+    if (likesError) throw likesError;
+    for (const like of likeRows ?? []) {
+      likeCounts.set(like.media_id, (likeCounts.get(like.media_id) ?? 0) + 1);
+      if (deviceId && like.device_id === deviceId) likedByMeSet.add(like.media_id);
+    }
+  }
+
   const media = await Promise.all(
     (mediaRows ?? []).map(async (row) => ({
       ...(row as MediaRow),
@@ -143,6 +158,8 @@ export async function getAlbumView(token: string): Promise<AlbumViewModel | null
       downloadUrl: windows.isArchived
         ? ''
         : await createDownloadUrl(row.r2_key, downloadFilename(album.name, row.id, row.content_type)),
+      likeCount: likeCounts.get(row.id) ?? 0,
+      likedByMe: likedByMeSet.has(row.id),
     }))
   );
 
@@ -309,6 +326,42 @@ export async function deleteMedia(
   if (deleteError) throw deleteError;
 
   return { ok: true };
+}
+
+export async function toggleLike(
+  mediaId: string,
+  deviceId: string
+): Promise<{ ok: boolean; liked?: boolean; likeCount?: number; reason?: string }> {
+  if (!deviceId) return { ok: false, reason: 'Falta identificar el dispositivo.' };
+
+  const supabase = getSupabaseAdmin();
+  const { data: existing, error: findError } = await supabase
+    .from('media_likes')
+    .select('media_id')
+    .eq('media_id', mediaId)
+    .eq('device_id', deviceId)
+    .maybeSingle();
+  if (findError) throw findError;
+
+  if (existing) {
+    const { error: deleteError } = await supabase
+      .from('media_likes')
+      .delete()
+      .eq('media_id', mediaId)
+      .eq('device_id', deviceId);
+    if (deleteError) throw deleteError;
+  } else {
+    const { error: insertError } = await supabase.from('media_likes').insert({ media_id: mediaId, device_id: deviceId });
+    if (insertError) throw insertError;
+  }
+
+  const { count, error: countError } = await supabase
+    .from('media_likes')
+    .select('media_id', { count: 'exact', head: true })
+    .eq('media_id', mediaId);
+  if (countError) throw countError;
+
+  return { ok: true, liked: !existing, likeCount: count ?? 0 };
 }
 
 export async function closeAlbum(token: string): Promise<{ ok: boolean; reason?: string }> {

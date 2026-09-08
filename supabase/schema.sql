@@ -43,6 +43,15 @@ create table if not exists media (
 
 create index if not exists media_album_id_idx on media(album_id);
 
+create table if not exists media_likes (
+  media_id uuid not null references media(id) on delete cascade,
+  device_id text not null,
+  created_at timestamptz not null default now(),
+  primary key (media_id, device_id)
+);
+
+create index if not exists media_likes_media_id_idx on media_likes(media_id);
+
 -- Row Level Security queda deshabilitada a propósito: todo el acceso pasa por las
 -- API routes de Next.js usando la Service Role Key (ver lib/supabase.ts). Los
 -- invitados no tienen sesión de Supabase — su "permiso" es poseer el token de la URL.
