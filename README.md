@@ -106,6 +106,7 @@ Abrir `http://localhost:3000`, crear un álbum de prueba y probar el flujo compl
 
 ## Costos mientras se prueba
 
+
 Con 3-4 álbumes de prueba a full, todo entra dentro de las capas gratuitas de Supabase,
 Cloudflare R2 y Vercel (ver el documento de producto para el detalle de por qué y cuándo
 eso deja de ser así).
