@@ -15,6 +15,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ to
     durationSeconds: typeof body.durationSeconds === 'number' ? body.durationSeconds : undefined,
     width: typeof body.width === 'number' ? body.width : undefined,
     height: typeof body.height === 'number' ? body.height : undefined,
+    displayContentType: typeof body.displayContentType === 'string' ? body.displayContentType : undefined,
+    displaySizeBytes: typeof body.displaySizeBytes === 'number' ? body.displaySizeBytes : undefined,
     uploaderLabel: typeof body.uploaderLabel === 'string' ? body.uploaderLabel : undefined,
     uploaderDeviceId: typeof body.uploaderDeviceId === 'string' ? body.uploaderDeviceId : undefined,
   });

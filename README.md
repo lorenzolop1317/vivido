@@ -26,12 +26,14 @@ app/                    páginas y API routes
   api/                   endpoints usados por los componentes cliente
 components/
   CreateAlbumForm.tsx    formulario de creación (cliente)
-  AlbumWorkspace.tsx     subida, galería y moderación (cliente)
+  AlbumWorkspace.tsx     subida, galería, portada y moderación (cliente)
+  Footer.tsx             pie de página (contacto, copyright, logo) — en todas las páginas
 lib/
-  albums.ts              toda la lógica de negocio (roles, límites, ventanas)
+  albums.ts              toda la lógica de negocio (roles, límites, ventanas, portada)
+  contact.ts              guarda los mensajes del formulario de contacto
   r2.ts                  integración con Cloudflare R2
   supabase.ts            cliente de Supabase (server-only)
-  export.ts               armado del .zip para descarga
+  export.ts               armado del .zip para descarga (siempre con el archivo original)
   cleanup.ts              archivado de álbumes vencidos (retención)
   limits.ts               los números del plan gratis, en un solo lugar
 supabase/schema.sql       esquema de base de datos, para pegar en Supabase
@@ -43,7 +45,10 @@ supabase/schema.sql       esquema de base de datos, para pegar en Supabase
 1. Crear cuenta/proyecto en [supabase.com](https://supabase.com) (capa gratis alcanza para
    este MVP).
 2. En el proyecto, ir a **SQL Editor**, pegar el contenido de `supabase/schema.sql` y
-   ejecutarlo. Esto crea las tres tablas (`albums`, `album_tokens`, `media`).
+   ejecutarlo. Esto crea las tablas (`albums`, `album_tokens`, `media`, `media_likes`,
+   `contact_messages`). Si el proyecto ya existía de antes, correr el mismo archivo de
+   nuevo no rompe nada — los `alter table ... add column if not exists` solo agregan lo
+   que falte (portada de álbum, copia liviana de fotos, etc.).
 3. En **Project Settings → API**, copiar:
    - `Project URL` → variable `SUPABASE_URL`
    - `service_role` key (no la `anon`) → variable `SUPABASE_SERVICE_ROLE_KEY`
@@ -107,6 +112,16 @@ Abrir `http://localhost:3000`, crear un álbum de prueba y probar el flujo compl
 - **Plan pago**: el esquema y el código ya distinguen `plan: 'free' | 'pro'` y dejan lugar
   para el rol de co-moderador, pero todavía no hay integración de Stripe ni pantalla de
   upgrade — se agrega cuando se decida activar la monetización.
+- **Fotos en dos versiones**: cada foto se sube en su calidad original (para descargar) y,
+  si es grande, además se genera en el propio navegador una copia liviana (~1920px, JPEG)
+  solo para mostrar en la galería web — así carga mucho más rápido sin resignar calidad al
+  bajarla. Esto usa algo más de almacenamiento (las dos copias cuentan contra el límite del
+  plan). Los videos por ahora no tienen esta copia liviana (ver `BACKLOG.md`).
+- **Formulario de contacto**: los mensajes se guardan en la tabla `contact_messages` de
+  Supabase — no hay todavía un email de notificación real conectado (se revisan desde el
+  Table Editor). El email de contacto que se muestra en el pie de página es un placeholder
+  (`CONTACT_EMAIL` en `components/Footer.tsx`) — cambiarlo por el real antes de compartir
+  el álbum con gente de verdad.
 
 ## Costos mientras se prueba
 

@@ -21,12 +21,19 @@ export async function archiveExpiredAlbums() {
 
     const { data: mediaRows, error: mediaError } = await supabase
       .from('media')
-      .select('id, r2_key')
+      .select('id, r2_key, r2_key_display')
       .eq('album_id', album.id);
     if (mediaError) throw mediaError;
 
     for (const media of mediaRows ?? []) {
       await deleteObject(media.r2_key);
+      if (media.r2_key_display) {
+        await deleteObject(media.r2_key_display).catch(() => {});
+      }
+    }
+
+    if (album.cover_image_key) {
+      await deleteObject(album.cover_image_key).catch(() => {});
     }
 
     const { error: deleteMediaError } = await supabase.from('media').delete().eq('album_id', album.id);

@@ -58,6 +58,46 @@ function readVideoMeta(file: File): Promise<{ duration: number; width: number; h
   });
 }
 
+const DISPLAY_MAX_DIMENSION = 1920; // suficiente para verse nítido en cualquier pantalla
+const DISPLAY_JPEG_QUALITY = 0.82;
+
+/**
+ * Genera, en el propio navegador, una copia liviana de una foto para MOSTRAR
+ * en la galería — el archivo original se sube igual, intacto, para descargar
+ * en máxima calidad (ver comentario en lib/albums.ts). Si la foto ya es chica
+ * o la copia no termina pesando bastante menos, no vale la pena duplicar
+ * espacio: devolvemos null y esa foto simplemente usa el original también
+ * para verse. Ante cualquier error devolvemos null también — nunca debe
+ * bloquear la subida real por esto.
+ */
+async function createDisplayVersion(file: File, width: number, height: number): Promise<Blob | null> {
+  const maxSide = Math.max(width, height);
+  if (!maxSide || maxSide <= DISPLAY_MAX_DIMENSION) return null;
+
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = DISPLAY_MAX_DIMENSION / maxSide;
+    const targetWidth = Math.max(1, Math.round(width * scale));
+    const targetHeight = Math.max(1, Math.round(height * scale));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+    bitmap.close?.();
+
+    const blob: Blob | null = await new Promise((resolve) =>
+      canvas.toBlob((b) => resolve(b), 'image/jpeg', DISPLAY_JPEG_QUALITY)
+    );
+    if (!blob || blob.size >= file.size * 0.9) return null;
+    return blob;
+  } catch {
+    return null;
+  }
+}
+
 /* ---------- Íconos (SVG a mano, sin librerías externas) ---------- */
 
 function CameraIcon({ className }: { className?: string }) {
@@ -129,6 +169,26 @@ function BrokenImageIcon({ className }: { className?: string }) {
   );
 }
 
+function VideoIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={className}>
+      <rect x="3" y="6.5" width="13" height="11" rx="2" />
+      <path d="m16 10.5 4.5-2.7a.8.8 0 0 1 1.2.7v7l-4.5-2.7" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ImageEditIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className={className}>
+      <rect x="3" y="4.5" width="18" height="13" rx="2" />
+      <circle cx="8.5" cy="9.5" r="1.4" />
+      <path d="m4 15 4.5-4.5a1.6 1.6 0 0 1 2.2 0L15 14.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m14 20 1.6-3.6L20 15l-1.6 3.6L20 20l-3.6-1.6L14 20Z" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function Spinner({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={`animate-spin ${className ?? ''}`}>
@@ -144,6 +204,7 @@ type UploadStatus = 'uploading' | 'done' | 'error';
 interface UploadItem {
   key: string;
   name: string;
+  file: File;
   status: UploadStatus;
   error?: string;
 }
@@ -152,7 +213,8 @@ interface UploadSummary {
   videos: number;
   errors: number;
 }
-type UploadStage = 'idle' | 'uploading' | 'summary';
+type UploadStage = 'idle' | 'uploading' | 'retry' | 'summary';
+type UploadRoundResult = { item: UploadItem; result: 'photo' | 'video' | 'error' };
 
 interface AlbumMeta {
   role: AlbumViewModel['role'];
@@ -162,6 +224,7 @@ interface AlbumMeta {
   canUpload: boolean;
   canModerate: boolean;
   mediaTotal: number;
+  coverImageUrl: string | null;
 }
 
 export default function AlbumWorkspace({ token, initialView }: { token: string; initialView: AlbumViewModel }) {
@@ -173,6 +236,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
     canUpload: initialView.canUpload,
     canModerate: initialView.canModerate,
     mediaTotal: initialView.mediaTotal,
+    coverImageUrl: initialView.coverImageUrl,
   });
   const [mediaItems, setMediaItems] = useState<MediaItem[]>(initialView.media);
   const [hasMore, setHasMore] = useState(initialView.hasMore);
@@ -180,7 +244,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
   const [deviceId, setDeviceId] = useState('');
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [uploadStage, setUploadStage] = useState<UploadStage>('idle');
-  const [uploadDoneCount, setUploadDoneCount] = useState(0);
+  const [failedItems, setFailedItems] = useState<UploadItem[]>([]);
   const [uploadSummary, setUploadSummary] = useState<UploadSummary | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
@@ -188,9 +252,16 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [coverUploading, setCoverUploading] = useState(false);
+  const [coverError, setCoverError] = useState<string | null>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const cameraPhotoInputRef = useRef<HTMLInputElement>(null);
+  const cameraVideoInputRef = useRef<HTMLInputElement>(null);
+  const coverInputRef = useRef<HTMLInputElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  // Cuenta acumulada de éxitos entre la ronda inicial y los reintentos, para
+  // que el resumen final muestre el total real subido (no solo la última ronda).
+  const cumulativeRef = useRef({ photos: 0, videos: 0 });
 
   async function fetchPage(offset: number, limit: number, explicitDeviceId?: string): Promise<AlbumViewModel | null> {
     const id = explicitDeviceId ?? deviceId;
@@ -217,6 +288,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
         canUpload: data.canUpload,
         canModerate: data.canModerate,
         mediaTotal: data.mediaTotal,
+        coverImageUrl: data.coverImageUrl,
       });
       setMediaItems(data.media);
       setHasMore(data.hasMore);
@@ -265,127 +337,196 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
     return () => window.removeEventListener('beforeunload', handler);
   }, [uploads]);
 
+  // Sube un archivo a una URL prefirmada, con un reintento y una pequeña
+  // espera entre intentos — igual que la subida principal, para que una
+  // falla puntual de red no tire abajo todo el archivo.
+  async function putWithRetry(url: string, blob: Blob, contentType: string): Promise<boolean> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const putRes = await fetch(url, { method: 'PUT', headers: { 'Content-Type': contentType }, body: blob });
+        if (putRes.ok) return true;
+      } catch {
+        // sigue al reintento
+      }
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 1200));
+    }
+    return false;
+  }
+
+  async function uploadOneItem(item: UploadItem): Promise<'photo' | 'video' | 'error'> {
+    const file = item.file;
+    let createdMediaId: string | undefined;
+    try {
+      let durationSeconds: number | undefined;
+      let width: number | undefined;
+      let height: number | undefined;
+      let displayBlob: Blob | null = null;
+
+      if (file.type.startsWith('video/')) {
+        const meta = await readVideoMeta(file);
+        durationSeconds = meta.duration;
+        width = meta.width || undefined;
+        height = meta.height || undefined;
+      } else {
+        const dims = await readImageDimensions(file).catch(() => null);
+        if (dims) {
+          width = dims.width;
+          height = dims.height;
+        }
+        // Copia liviana solo para MOSTRAR en la galería — el original se sube
+        // igual, siempre, en máxima calidad (para descargar). Si la foto ya es
+        // chica o no vale la pena, esto devuelve null y usamos el original
+        // también para verla.
+        if (width && height) {
+          displayBlob = await createDisplayVersion(file, width, height);
+        }
+      }
+
+      const urlRes = await fetch(`/api/albums/${token}/upload-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contentType: file.type,
+          sizeBytes: file.size,
+          durationSeconds,
+          width,
+          height,
+          displayContentType: displayBlob ? 'image/jpeg' : undefined,
+          displaySizeBytes: displayBlob ? displayBlob.size : undefined,
+          uploaderDeviceId: deviceId,
+        }),
+      });
+      const urlData = await urlRes.json();
+      if (!urlRes.ok) throw new Error(urlData.error ?? 'No se pudo iniciar la subida.');
+      createdMediaId = urlData.mediaId;
+
+      // El original SIEMPRE se sube completo — acá nunca se resigna calidad.
+      const uploaded = await putWithRetry(urlData.uploadUrl, file, file.type);
+      if (!uploaded) throw new Error('Falló la subida a almacenamiento.');
+
+      // La copia liviana es "best effort": si por lo que sea falla después de
+      // reintentar, no perdemos la foto entera por eso — simplemente le
+      // avisamos al servidor que la borre de la base para que la galería
+      // muestre el original en su lugar.
+      if (displayBlob && urlData.uploadUrlDisplay) {
+        const displayUploaded = await putWithRetry(urlData.uploadUrlDisplay, displayBlob, 'image/jpeg');
+        if (!displayUploaded) {
+          fetch(`/api/media/${createdMediaId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, action: 'clear-display' }),
+          }).catch(() => {});
+        }
+      }
+
+      setUploads((prev) => prev.map((u) => (u.key === item.key ? { ...u, status: 'done', error: undefined } : u)));
+      return file.type.startsWith('video/') ? 'video' : 'photo';
+    } catch (err) {
+      // Si ya se había creado el registro en la base pero el archivo nunca
+      // llegó a Cloudflare, lo borramos para no dejar una miniatura "rota"
+      // dando vueltas — mejor fallar limpio que dejar basura para después.
+      if (createdMediaId) {
+        fetch(`/api/media/${createdMediaId}?token=${token}&deviceId=${deviceId}`, { method: 'DELETE' }).catch(() => {});
+      }
+      const message = err instanceof Error ? err.message : 'Error inesperado.';
+      setUploads((prev) => prev.map((u) => (u.key === item.key ? { ...u, status: 'error', error: message } : u)));
+      return 'error';
+    }
+  }
+
+  // Subimos con hasta 3 en simultáneo en vez de una por una: en lotes
+  // grandes (50+ fotos) baja mucho el tiempo total, lo que además reduce
+  // las chances de que el navegador del celular pause la pestaña a mitad
+  // de camino si se bloquea la pantalla o se cambia de app. La misma función
+  // se usa tanto para la ronda inicial como para un reintento (con un
+  // subconjunto de archivos).
+  async function runPool(items: UploadItem[]): Promise<UploadRoundResult[]> {
+    const CONCURRENCY = 3;
+    let cursor = 0;
+    const results: UploadRoundResult[] = [];
+    async function worker() {
+      while (cursor < items.length) {
+        const idx = cursor;
+        cursor += 1;
+        const result = await uploadOneItem(items[idx]);
+        results.push({ item: items[idx], result });
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, worker));
+    return results;
+  }
+
+  async function refreshMediaAfterUpload(count: number) {
+    if (count <= 0) return;
+    const fresh = await fetchPage(0, count);
+    if (fresh) {
+      setMediaItems((prev) => {
+        const newIds = new Set(fresh.media.map((m) => m.id));
+        const merged = [...fresh.media, ...prev.filter((m) => !newIds.has(m.id))];
+        setHasMore(fresh.mediaTotal > merged.length);
+        return merged;
+      });
+      setMeta((prev) => ({ ...prev, storageUsedBytes: fresh.storageUsedBytes, mediaTotal: fresh.mediaTotal }));
+    }
+  }
+
+  // Procesa el resultado de una ronda (la inicial o un reintento): si quedan
+  // archivos fallidos, en vez de saltar directo al resumen nos quedamos en
+  // una pantalla de "reintentar" — así el usuario tiene otra oportunidad de
+  // volver a intentar justo lo que falló, sin tener que ubicarlo a mano
+  // entre decenas de fotos ya subidas.
+  async function processRound(results: UploadRoundResult[]) {
+    const photos = results.filter((r) => r.result === 'photo').length;
+    const videos = results.filter((r) => r.result === 'video').length;
+    const failed = results.filter((r) => r.result === 'error').map((r) => r.item);
+
+    cumulativeRef.current.photos += photos;
+    cumulativeRef.current.videos += videos;
+
+    await refreshMediaAfterUpload(photos + videos);
+    setFailedItems(failed);
+
+    if (failed.length === 0) {
+      setUploadSummary({ photos: cumulativeRef.current.photos, videos: cumulativeRef.current.videos, errors: 0 });
+      setUploadStage('summary');
+    } else {
+      setUploadStage('retry');
+    }
+  }
+
   async function handleFiles(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
     const files = Array.from(fileList);
+    const items: UploadItem[] = files.map((f) => ({
+      key: `${f.name}-${f.size}-${Date.now()}-${Math.random()}`,
+      name: f.name,
+      file: f,
+      status: 'uploading' as const,
+    }));
 
+    cumulativeRef.current = { photos: 0, videos: 0 };
     setModalOpen(true);
     setUploadStage('uploading');
-    setUploads(files.map((f) => ({ key: `${f.name}-${f.size}-${Date.now()}-${Math.random()}`, name: f.name, status: 'uploading' as const })));
-    setUploadDoneCount(0);
+    setUploads(items);
+    setFailedItems([]);
+    setUploadSummary(null);
 
-    async function uploadOne(file: File, i: number): Promise<'photo' | 'video' | 'error'> {
-      let createdMediaId: string | undefined;
-      try {
-        let durationSeconds: number | undefined;
-        let width: number | undefined;
-        let height: number | undefined;
+    const results = await runPool(items);
+    await processRound(results);
+  }
 
-        if (file.type.startsWith('video/')) {
-          const meta = await readVideoMeta(file);
-          durationSeconds = meta.duration;
-          width = meta.width || undefined;
-          height = meta.height || undefined;
-        } else {
-          const dims = await readImageDimensions(file).catch(() => null);
-          if (dims) {
-            width = dims.width;
-            height = dims.height;
-          }
-        }
+  async function handleRetryFailed() {
+    if (failedItems.length === 0) return;
+    const toRetry = failedItems;
+    setUploadStage('uploading');
+    setUploads((prev) => prev.map((u) => (toRetry.some((t) => t.key === u.key) ? { ...u, status: 'uploading', error: undefined } : u)));
+    setFailedItems([]);
+    const results = await runPool(toRetry);
+    await processRound(results);
+  }
 
-        const urlRes = await fetch(`/api/albums/${token}/upload-url`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contentType: file.type,
-            sizeBytes: file.size,
-            durationSeconds,
-            width,
-            height,
-            uploaderDeviceId: deviceId,
-          }),
-        });
-        const urlData = await urlRes.json();
-        if (!urlRes.ok) throw new Error(urlData.error ?? 'No se pudo iniciar la subida.');
-        createdMediaId = urlData.mediaId;
-
-        // Reintentamos una vez la subida real del archivo: en wifi/datos lentos
-        // o inestables (muy común subiendo desde el celular en un evento) una
-        // falla puntual de red no debería perder la foto directamente.
-        let lastError: unknown;
-        let uploaded = false;
-        for (let attempt = 0; attempt < 2 && !uploaded; attempt++) {
-          try {
-            const putRes = await fetch(urlData.uploadUrl, {
-              method: 'PUT',
-              headers: { 'Content-Type': file.type },
-              body: file,
-            });
-            if (!putRes.ok) throw new Error('Falló la subida a almacenamiento.');
-            uploaded = true;
-          } catch (err) {
-            lastError = err;
-            if (attempt === 0) await new Promise((r) => setTimeout(r, 1200));
-          }
-        }
-        if (!uploaded) throw lastError instanceof Error ? lastError : new Error('Falló la subida a almacenamiento.');
-
-        setUploads((prev) => prev.map((u, idx) => (idx === i ? { ...u, status: 'done' } : u)));
-        return file.type.startsWith('video/') ? 'video' : 'photo';
-      } catch (err) {
-        // Si ya se había creado el registro en la base pero el archivo nunca
-        // llegó a Cloudflare, lo borramos para no dejar una miniatura "rota"
-        // dando vueltas — mejor fallar limpio que dejar basura para después.
-        if (createdMediaId) {
-          fetch(`/api/media/${createdMediaId}?token=${token}&deviceId=${deviceId}`, { method: 'DELETE' }).catch(() => {});
-        }
-        const message = err instanceof Error ? err.message : 'Error inesperado.';
-        setUploads((prev) => prev.map((u, idx) => (idx === i ? { ...u, status: 'error', error: message } : u)));
-        return 'error';
-      } finally {
-        setUploadDoneCount((c) => c + 1);
-      }
-    }
-
-    // Subimos con hasta 3 en simultáneo en vez de una por una: en lotes
-    // grandes (50+ fotos) baja mucho el tiempo total, lo que además reduce
-    // las chances de que el navegador del celular pause la pestaña a mitad
-    // de camino si se bloquea la pantalla o se cambia de app.
-    const CONCURRENCY = 3;
-    let photos = 0;
-    let videos = 0;
-    let errors = 0;
-    let cursor = 0;
-
-    async function worker() {
-      while (cursor < files.length) {
-        const i = cursor;
-        cursor += 1;
-        const result = await uploadOne(files[i], i);
-        if (result === 'photo') photos += 1;
-        else if (result === 'video') videos += 1;
-        else errors += 1;
-      }
-    }
-
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, files.length) }, worker));
-
-    const uploadedCount = photos + videos;
-    if (uploadedCount > 0) {
-      const fresh = await fetchPage(0, uploadedCount);
-      if (fresh) {
-        setMediaItems((prev) => {
-          const newIds = new Set(fresh.media.map((m) => m.id));
-          const merged = [...fresh.media, ...prev.filter((m) => !newIds.has(m.id))];
-          setHasMore(fresh.mediaTotal > merged.length);
-          return merged;
-        });
-        setMeta((prev) => ({ ...prev, storageUsedBytes: fresh.storageUsedBytes, mediaTotal: fresh.mediaTotal }));
-      }
-    }
-
-    setUploadSummary({ photos, videos, errors });
+  function handleContinueWithErrors() {
+    setUploadSummary({ photos: cumulativeRef.current.photos, videos: cumulativeRef.current.videos, errors: failedItems.length });
     setUploadStage('summary');
   }
 
@@ -393,15 +534,67 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
     setModalOpen(false);
     setUploadStage('idle');
     setUploads([]);
+    setFailedItems([]);
     setUploadSummary(null);
   }
 
-  function triggerCamera() {
-    cameraInputRef.current?.click();
+  function triggerCameraPhoto() {
+    cameraPhotoInputRef.current?.click();
+  }
+
+  function triggerCameraVideo() {
+    cameraVideoInputRef.current?.click();
   }
 
   function triggerGallery() {
     galleryInputRef.current?.click();
+  }
+
+  function triggerCoverUpload() {
+    coverInputRef.current?.click();
+  }
+
+  async function handleCoverFile(file: File | null) {
+    if (!file) return;
+    setCoverError(null);
+    setCoverUploading(true);
+    try {
+      const urlRes = await fetch(`/api/albums/${token}/cover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contentType: file.type, sizeBytes: file.size }),
+      });
+      const urlData = await urlRes.json();
+      if (!urlRes.ok) throw new Error(urlData.error ?? 'No se pudo iniciar la subida de la portada.');
+
+      const putRes = await fetch(urlData.uploadUrl, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
+      if (!putRes.ok) throw new Error('Falló la subida de la portada.');
+
+      const confirmRes = await fetch(`/api/albums/${token}/cover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'confirm', key: urlData.key }),
+      });
+      if (!confirmRes.ok) throw new Error('No se pudo guardar la portada.');
+
+      // Vista previa instantánea con el archivo local, sin esperar a la URL
+      // firmada del servidor — se actualiza sola en la próxima recarga.
+      setMeta((prev) => ({ ...prev, coverImageUrl: URL.createObjectURL(file) }));
+    } catch (err) {
+      setCoverError(err instanceof Error ? err.message : 'Error inesperado.');
+    } finally {
+      setCoverUploading(false);
+    }
+  }
+
+  async function handleRemoveCover() {
+    if (!confirm('¿Quitar la imagen de portada del álbum?')) return;
+    const res = await fetch(`/api/albums/${token}/cover`, { method: 'DELETE' });
+    if (res.ok) {
+      setMeta((prev) => ({ ...prev, coverImageUrl: null }));
+    } else {
+      alert('No se pudo quitar la portada.');
+    }
   }
 
   async function handleDelete(mediaId: string) {
@@ -501,7 +694,8 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
     }
   }
 
-  const { album, role, windows, storageUsedBytes, canUpload, canModerate, mediaTotal } = meta;
+  const doneCount = uploads.filter((u) => u.status !== 'uploading').length;
+  const { album, role, windows, storageUsedBytes, canUpload, canModerate, mediaTotal, coverImageUrl } = meta;
   const storagePercent = Math.min(100, (storageUsedBytes / album.storage_limit_bytes) * 100);
   const uploadAvailable = canUpload && windows.uploadOpen;
   const showInlineCta = mediaTotal === 0 && uploadAvailable && !modalOpen;
@@ -509,9 +703,17 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
   return (
     <main className={`mx-auto min-h-screen max-w-5xl px-4 py-8 sm:px-6 ${selectMode ? 'pb-24' : ''}`}>
       <input
-        ref={cameraInputRef}
+        ref={cameraPhotoInputRef}
         type="file"
-        accept="image/*,video/*"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={(e) => handleFiles(e.target.files)}
+      />
+      <input
+        ref={cameraVideoInputRef}
+        type="file"
+        accept="video/*"
         capture="environment"
         className="hidden"
         onChange={(e) => handleFiles(e.target.files)}
@@ -524,6 +726,50 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
         className="hidden"
         onChange={(e) => handleFiles(e.target.files)}
       />
+      <input
+        ref={coverInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        className="hidden"
+        onChange={(e) => {
+          handleCoverFile(e.target.files?.[0] ?? null);
+          e.target.value = '';
+        }}
+      />
+
+      {!windows.isArchived && (coverImageUrl || canModerate) && (
+        <div className="group relative mb-6 h-36 w-full overflow-hidden rounded-2xl bg-gray-100 shadow-sm sm:h-52">
+          {coverImageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={coverImageUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center border-2 border-dashed border-gray-300 bg-white/50 text-sm text-gray-400">
+              Sin portada todavía
+            </div>
+          )}
+          {canModerate && (
+            <div className="absolute bottom-2 right-2 flex gap-2 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100">
+              <button
+                onClick={triggerCoverUpload}
+                disabled={coverUploading}
+                className="flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm transition hover:bg-black/75 disabled:opacity-50"
+              >
+                <ImageEditIcon className="h-3.5 w-3.5" />
+                {coverUploading ? 'Subiendo…' : coverImageUrl ? 'Cambiar portada' : 'Agregar portada'}
+              </button>
+              {coverImageUrl && (
+                <button
+                  onClick={handleRemoveCover}
+                  className="rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm transition hover:bg-black/75"
+                >
+                  Quitar
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {coverError && <p className="mb-4 text-xs text-red-600">{coverError}</p>}
 
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -626,7 +872,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
             Sé el/la primero/a en sumar un recuerdo de este evento. Cualquiera con este enlace puede subir.
           </p>
           <div className="mx-auto mt-6 grid max-w-sm grid-cols-2 gap-3">
-            <UploadEntryButton variant="primary" icon={<CameraIcon className="h-7 w-7" />} label="Sacar foto o video" onClick={triggerCamera} />
+            <CameraEntryButton onPhoto={triggerCameraPhoto} onVideo={triggerCameraVideo} />
             <UploadEntryButton variant="secondary" icon={<ImagesIcon className="h-7 w-7" />} label="Elegir de la galería" onClick={triggerGallery} />
           </div>
         </div>
@@ -710,10 +956,14 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
         <UploadModal
           stage={uploadStage}
           uploads={uploads}
-          doneCount={uploadDoneCount}
+          doneCount={doneCount}
+          failedCount={failedItems.length}
           summary={uploadSummary}
-          onTriggerCamera={triggerCamera}
+          onTriggerCameraPhoto={triggerCameraPhoto}
+          onTriggerCameraVideo={triggerCameraVideo}
           onTriggerGallery={triggerGallery}
+          onRetryFailed={handleRetryFailed}
+          onContinueWithErrors={handleContinueWithErrors}
           onClose={closeUploadModal}
         />
       )}
@@ -850,7 +1100,7 @@ function Thumbnail({
                 e.stopPropagation();
                 onDelete();
               }}
-              className="absolute right-2 top-2 rounded-full bg-black/60 px-2.5 py-1 text-xs text-white opacity-0 transition group-hover:opacity-100"
+              className="absolute right-2 top-2 rounded-full bg-black/60 px-2.5 py-1 text-xs text-white opacity-0 pointer-events-none transition group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
             >
               Borrar
             </button>
@@ -887,23 +1137,74 @@ function UploadEntryButton({
   );
 }
 
+/**
+ * Botón de cámara con elección explícita de foto o video. Antes era un solo
+ * botón "Sacar foto o video" con un único <input> que aceptaba
+ * accept="image/*,video/*" — en varios navegadores de Android (entre ellos el
+ * de un Tecno Camon 30) eso hace que el sistema no sepa qué cámara abrir y
+ * termine mostrando la galería en su lugar. Separando en dos <input> (uno solo
+ * imagen, otro solo video), cada uno con su propio capture="environment", el
+ * navegador sí abre la cámara correspondiente de forma directa.
+ */
+function CameraEntryButton({ onPhoto, onVideo }: { onPhoto: () => void; onVideo: () => void }) {
+  const [open, setOpen] = useState(false);
+
+  if (!open) {
+    return (
+      <UploadEntryButton
+        variant="primary"
+        icon={<CameraIcon className="h-7 w-7" />}
+        label="Sacar foto o video"
+        onClick={() => setOpen(true)}
+      />
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-2xl bg-brand p-2.5 shadow-sm">
+      <button
+        onClick={onPhoto}
+        className="flex items-center justify-center gap-2 rounded-xl bg-white/15 py-3 text-sm font-semibold text-white transition hover:bg-white/25"
+      >
+        <CameraIcon className="h-5 w-5" />
+        Foto
+      </button>
+      <button
+        onClick={onVideo}
+        className="flex items-center justify-center gap-2 rounded-xl bg-white/15 py-3 text-sm font-semibold text-white transition hover:bg-white/25"
+      >
+        <VideoIcon className="h-5 w-5" />
+        Video
+      </button>
+    </div>
+  );
+}
+
 /* ---------- Modal de subida: botones → progreso → resumen ---------- */
 
 function UploadModal({
   stage,
   uploads,
   doneCount,
+  failedCount,
   summary,
-  onTriggerCamera,
+  onTriggerCameraPhoto,
+  onTriggerCameraVideo,
   onTriggerGallery,
+  onRetryFailed,
+  onContinueWithErrors,
   onClose,
 }: {
   stage: UploadStage;
   uploads: UploadItem[];
   doneCount: number;
+  failedCount: number;
   summary: UploadSummary | null;
-  onTriggerCamera: () => void;
+  onTriggerCameraPhoto: () => void;
+  onTriggerCameraVideo: () => void;
   onTriggerGallery: () => void;
+  onRetryFailed: () => void;
+  onContinueWithErrors: () => void;
   onClose: () => void;
 }) {
   const canClose = stage !== 'uploading';
@@ -920,6 +1221,7 @@ function UploadModal({
           <h2 className="font-serif-title text-xl text-brand-dark">
             {stage === 'idle' && 'Sumar al álbum'}
             {stage === 'uploading' && 'Subiendo…'}
+            {stage === 'retry' && 'Casi listo'}
             {stage === 'summary' && '¡Listo!'}
           </h2>
           {canClose && (
@@ -931,7 +1233,7 @@ function UploadModal({
 
         {stage === 'idle' && (
           <div className="grid grid-cols-2 gap-3">
-            <UploadEntryButton variant="primary" icon={<CameraIcon className="h-7 w-7" />} label="Sacar foto o video" onClick={onTriggerCamera} />
+            <CameraEntryButton onPhoto={onTriggerCameraPhoto} onVideo={onTriggerCameraVideo} />
             <UploadEntryButton variant="secondary" icon={<ImagesIcon className="h-7 w-7" />} label="Elegir de la galería" onClick={onTriggerGallery} />
           </div>
         )}
@@ -963,6 +1265,44 @@ function UploadModal({
               ))}
             </ul>
           </>
+        )}
+
+        {stage === 'retry' && (
+          <div>
+            <p className="text-sm text-gray-600">
+              Se subieron {doneCount - failedCount} de {total} correctamente.
+            </p>
+            <p className="mt-1 text-sm text-red-600">
+              {failedCount} {failedCount === 1 ? 'archivo falló' : 'archivos fallaron'}. Podés intentarlo de nuevo antes de cerrar.
+            </p>
+            <ul className="mt-3 max-h-56 space-y-2 overflow-y-auto pr-1">
+              {uploads
+                .filter((u) => u.status === 'error')
+                .map((u) => (
+                  <li key={u.key} className="flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs">
+                    <XIcon className="h-4 w-4 shrink-0 text-red-500" />
+                    <span className="truncate text-red-600">
+                      {u.name}
+                      {u.error ? ` — ${u.error}` : ''}
+                    </span>
+                  </li>
+                ))}
+            </ul>
+            <div className="mt-5 flex gap-2">
+              <button
+                onClick={onContinueWithErrors}
+                className="flex-1 rounded-lg border border-gray-300 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50"
+              >
+                Continuar sin esas
+              </button>
+              <button
+                onClick={onRetryFailed}
+                className="flex-1 rounded-lg bg-brand py-2.5 text-sm font-semibold text-white hover:bg-brand-dark"
+              >
+                Reintentar ({failedCount})
+              </button>
+            </div>
+          </div>
         )}
 
         {stage === 'summary' && summary && (
