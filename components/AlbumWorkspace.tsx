@@ -180,6 +180,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
   const [deviceId, setDeviceId] = useState('');
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [uploadStage, setUploadStage] = useState<UploadStage>('idle');
+  const [uploadDoneCount, setUploadDoneCount] = useState(0);
   const [uploadSummary, setUploadSummary] = useState<UploadSummary | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
@@ -271,13 +272,10 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
     setModalOpen(true);
     setUploadStage('uploading');
     setUploads(files.map((f) => ({ key: `${f.name}-${f.size}-${Date.now()}-${Math.random()}`, name: f.name, status: 'uploading' as const })));
+    setUploadDoneCount(0);
 
-    let photos = 0;
-    let videos = 0;
-    let errors = 0;
-
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+    async function uploadOne(file: File, i: number): Promise<'photo' | 'video' | 'error'> {
+      let createdMediaId: string | undefined;
       try {
         let durationSeconds: number | undefined;
         let width: number | undefined;
@@ -310,23 +308,68 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
         });
         const urlData = await urlRes.json();
         if (!urlRes.ok) throw new Error(urlData.error ?? 'No se pudo iniciar la subida.');
+        createdMediaId = urlData.mediaId;
 
-        const putRes = await fetch(urlData.uploadUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': file.type },
-          body: file,
-        });
-        if (!putRes.ok) throw new Error('Falló la subida a almacenamiento.');
+        // Reintentamos una vez la subida real del archivo: en wifi/datos lentos
+        // o inestables (muy común subiendo desde el celular en un evento) una
+        // falla puntual de red no debería perder la foto directamente.
+        let lastError: unknown;
+        let uploaded = false;
+        for (let attempt = 0; attempt < 2 && !uploaded; attempt++) {
+          try {
+            const putRes = await fetch(urlData.uploadUrl, {
+              method: 'PUT',
+              headers: { 'Content-Type': file.type },
+              body: file,
+            });
+            if (!putRes.ok) throw new Error('Falló la subida a almacenamiento.');
+            uploaded = true;
+          } catch (err) {
+            lastError = err;
+            if (attempt === 0) await new Promise((r) => setTimeout(r, 1200));
+          }
+        }
+        if (!uploaded) throw lastError instanceof Error ? lastError : new Error('Falló la subida a almacenamiento.');
 
         setUploads((prev) => prev.map((u, idx) => (idx === i ? { ...u, status: 'done' } : u)));
-        if (file.type.startsWith('video/')) videos += 1;
-        else photos += 1;
+        return file.type.startsWith('video/') ? 'video' : 'photo';
       } catch (err) {
+        // Si ya se había creado el registro en la base pero el archivo nunca
+        // llegó a Cloudflare, lo borramos para no dejar una miniatura "rota"
+        // dando vueltas — mejor fallar limpio que dejar basura para después.
+        if (createdMediaId) {
+          fetch(`/api/media/${createdMediaId}?token=${token}&deviceId=${deviceId}`, { method: 'DELETE' }).catch(() => {});
+        }
         const message = err instanceof Error ? err.message : 'Error inesperado.';
         setUploads((prev) => prev.map((u, idx) => (idx === i ? { ...u, status: 'error', error: message } : u)));
-        errors += 1;
+        return 'error';
+      } finally {
+        setUploadDoneCount((c) => c + 1);
       }
     }
+
+    // Subimos con hasta 3 en simultáneo en vez de una por una: en lotes
+    // grandes (50+ fotos) baja mucho el tiempo total, lo que además reduce
+    // las chances de que el navegador del celular pause la pestaña a mitad
+    // de camino si se bloquea la pantalla o se cambia de app.
+    const CONCURRENCY = 3;
+    let photos = 0;
+    let videos = 0;
+    let errors = 0;
+    let cursor = 0;
+
+    async function worker() {
+      while (cursor < files.length) {
+        const i = cursor;
+        cursor += 1;
+        const result = await uploadOne(files[i], i);
+        if (result === 'photo') photos += 1;
+        else if (result === 'video') videos += 1;
+        else errors += 1;
+      }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, files.length) }, worker));
 
     const uploadedCount = photos + videos;
     if (uploadedCount > 0) {
@@ -667,6 +710,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
         <UploadModal
           stage={uploadStage}
           uploads={uploads}
+          doneCount={uploadDoneCount}
           summary={uploadSummary}
           onTriggerCamera={triggerCamera}
           onTriggerGallery={triggerGallery}
@@ -848,6 +892,7 @@ function UploadEntryButton({
 function UploadModal({
   stage,
   uploads,
+  doneCount,
   summary,
   onTriggerCamera,
   onTriggerGallery,
@@ -855,12 +900,15 @@ function UploadModal({
 }: {
   stage: UploadStage;
   uploads: UploadItem[];
+  doneCount: number;
   summary: UploadSummary | null;
   onTriggerCamera: () => void;
   onTriggerGallery: () => void;
   onClose: () => void;
 }) {
   const canClose = stage !== 'uploading';
+  const total = uploads.length;
+  const progressPercent = total > 0 ? Math.round((doneCount / total) * 100) : 0;
 
   return (
     <div
@@ -889,19 +937,32 @@ function UploadModal({
         )}
 
         {stage === 'uploading' && (
-          <ul className="max-h-72 space-y-2 overflow-y-auto pr-1">
-            {uploads.map((u) => (
-              <li key={u.key} className="flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs">
-                {u.status === 'uploading' && <Spinner className="h-4 w-4 shrink-0 text-brand" />}
-                {u.status === 'done' && <CheckIcon className="h-4 w-4 shrink-0 text-green-600" />}
-                {u.status === 'error' && <XIcon className="h-4 w-4 shrink-0 text-red-500" />}
-                <span className={`truncate ${u.status === 'error' ? 'text-red-600' : 'text-gray-600'}`}>
-                  {u.name}
-                  {u.status === 'error' && u.error ? ` — ${u.error}` : ''}
+          <>
+            <div className="mb-3">
+              <div className="flex items-baseline justify-between">
+                <span className="text-sm font-semibold text-brand-dark">
+                  {doneCount} de {total}
                 </span>
-              </li>
-            ))}
-          </ul>
+                <span className="text-xs text-gray-500">{progressPercent}%</span>
+              </div>
+              <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-gray-200">
+                <div className="h-full bg-brand transition-all duration-300 ease-out" style={{ width: `${progressPercent}%` }} />
+              </div>
+            </div>
+            <ul className="max-h-72 space-y-2 overflow-y-auto pr-1">
+              {uploads.map((u) => (
+                <li key={u.key} className="flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs">
+                  {u.status === 'uploading' && <Spinner className="h-4 w-4 shrink-0 text-brand" />}
+                  {u.status === 'done' && <CheckIcon className="h-4 w-4 shrink-0 text-green-600" />}
+                  {u.status === 'error' && <XIcon className="h-4 w-4 shrink-0 text-red-500" />}
+                  <span className={`truncate ${u.status === 'error' ? 'text-red-600' : 'text-gray-600'}`}>
+                    {u.name}
+                    {u.status === 'error' && u.error ? ` — ${u.error}` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
 
         {stage === 'summary' && summary && (
