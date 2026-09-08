@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AlbumViewModel, MediaItem } from '@/lib/albums';
 
 const DEVICE_ID_KEY = 'event-album:device-id';
+const DISPLAY_NAME_KEY = 'event-album:display-name';
+const DISPLAY_NAME_SKIPPED_KEY = 'event-album:display-name-skipped';
 const PAGE_SIZE = 30;
 
 function getOrCreateDeviceId(): string {
@@ -242,6 +244,8 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
   const [hasMore, setHasMore] = useState(initialView.hasMore);
   const [loadingMore, setLoadingMore] = useState(false);
   const [deviceId, setDeviceId] = useState('');
+  const [displayName, setDisplayName] = useState<string | null>(null);
+  const [nameModalOpen, setNameModalOpen] = useState(false);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [uploadStage, setUploadStage] = useState<UploadStage>('idle');
   const [failedItems, setFailedItems] = useState<UploadItem[]>([]);
@@ -254,6 +258,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [coverUploading, setCoverUploading] = useState(false);
   const [coverError, setCoverError] = useState<string | null>(null);
+  const [coverEditorOpen, setCoverEditorOpen] = useState(false);
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const cameraPhotoInputRef = useRef<HTMLInputElement>(null);
   const cameraVideoInputRef = useRef<HTMLInputElement>(null);
@@ -278,6 +283,20 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
   useEffect(() => {
     const id = getOrCreateDeviceId();
     setDeviceId(id);
+
+    // Si la persona puede subir contenido, le pedimos su nombre apenas entra
+    // (antes de que haga nada) para que quede identificada en lo que suba —
+    // sirve tanto para dar crédito ("quién sacó esta foto tan linda") como
+    // para moderación (saber quién subió algo si hace falta). No es
+    // obligatorio: puede saltarlo, y en ese caso no se vuelve a preguntar.
+    const storedName = window.localStorage.getItem(DISPLAY_NAME_KEY);
+    const skipped = window.localStorage.getItem(DISPLAY_NAME_SKIPPED_KEY);
+    if (storedName) {
+      setDisplayName(storedName);
+    } else if (!skipped && initialView.canUpload && initialView.windows.uploadOpen) {
+      setNameModalOpen(true);
+    }
+
     fetchPage(0, Math.max(initialView.media.length, PAGE_SIZE), id).then((data) => {
       if (!data) return;
       setMeta({
@@ -394,6 +413,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
           displayContentType: displayBlob ? 'image/jpeg' : undefined,
           displaySizeBytes: displayBlob ? displayBlob.size : undefined,
           uploaderDeviceId: deviceId,
+          uploaderLabel: displayName || undefined,
         }),
       });
       const urlData = await urlRes.json();
@@ -578,8 +598,15 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
       if (!confirmRes.ok) throw new Error('No se pudo guardar la portada.');
 
       // Vista previa instantánea con el archivo local, sin esperar a la URL
-      // firmada del servidor — se actualiza sola en la próxima recarga.
-      setMeta((prev) => ({ ...prev, coverImageUrl: URL.createObjectURL(file) }));
+      // firmada del servidor — se actualiza sola en la próxima recarga. El
+      // servidor ya reseteó el encuadre a 50/50 para la foto nueva, así que
+      // reflejamos eso acá también y abrimos el editor para que la ajuste.
+      setMeta((prev) => ({
+        ...prev,
+        coverImageUrl: URL.createObjectURL(file),
+        album: { ...prev.album, cover_position_x: 50, cover_position_y: 50 },
+      }));
+      setCoverEditorOpen(true);
     } catch (err) {
       setCoverError(err instanceof Error ? err.message : 'Error inesperado.');
     } finally {
@@ -591,10 +618,35 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
     if (!confirm('¿Quitar la imagen de portada del álbum?')) return;
     const res = await fetch(`/api/albums/${token}/cover`, { method: 'DELETE' });
     if (res.ok) {
-      setMeta((prev) => ({ ...prev, coverImageUrl: null }));
+      setMeta((prev) => ({ ...prev, coverImageUrl: null, album: { ...prev.album, cover_position_x: 50, cover_position_y: 50 } }));
     } else {
       alert('No se pudo quitar la portada.');
     }
+  }
+
+  async function handleSaveCoverPosition(x: number, y: number) {
+    setMeta((prev) => ({ ...prev, album: { ...prev.album, cover_position_x: x, cover_position_y: y } }));
+    setCoverEditorOpen(false);
+    const res = await fetch(`/api/albums/${token}/cover`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'position', x, y }),
+    });
+    if (!res.ok) alert('No se pudo guardar el encuadre de la portada.');
+  }
+
+  function handleSaveName(name: string) {
+    const trimmed = name.trim().slice(0, 60);
+    if (!trimmed) return;
+    window.localStorage.setItem(DISPLAY_NAME_KEY, trimmed);
+    window.localStorage.removeItem(DISPLAY_NAME_SKIPPED_KEY);
+    setDisplayName(trimmed);
+    setNameModalOpen(false);
+  }
+
+  function handleSkipName() {
+    window.localStorage.setItem(DISPLAY_NAME_SKIPPED_KEY, '1');
+    setNameModalOpen(false);
   }
 
   async function handleDelete(mediaId: string) {
@@ -741,7 +793,12 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
         <div className="group relative mb-6 h-36 w-full overflow-hidden rounded-2xl bg-gray-100 shadow-sm sm:h-52">
           {coverImageUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={coverImageUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
+            <img
+              src={coverImageUrl}
+              alt=""
+              className="absolute inset-0 h-full w-full object-cover"
+              style={{ objectPosition: `${album.cover_position_x}% ${album.cover_position_y}%` }}
+            />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center border-2 border-dashed border-gray-300 bg-white/50 text-sm text-gray-400">
               Sin portada todavía
@@ -749,6 +806,14 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
           )}
           {canModerate && (
             <div className="absolute bottom-2 right-2 flex gap-2 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100">
+              {coverImageUrl && (
+                <button
+                  onClick={() => setCoverEditorOpen(true)}
+                  className="flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm transition hover:bg-black/75"
+                >
+                  Reposicionar
+                </button>
+              )}
               <button
                 onClick={triggerCoverUpload}
                 disabled={coverUploading}
@@ -771,6 +836,16 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
       )}
       {coverError && <p className="mb-4 text-xs text-red-600">{coverError}</p>}
 
+      {coverEditorOpen && coverImageUrl && (
+        <CoverPositionEditor
+          imageUrl={coverImageUrl}
+          initialX={album.cover_position_x}
+          initialY={album.cover_position_y}
+          onCancel={() => setCoverEditorOpen(false)}
+          onSave={handleSaveCoverPosition}
+        />
+      )}
+
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="font-serif-title text-3xl text-brand-dark">{album.name}</h1>
@@ -780,6 +855,23 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
           <p className="mt-1 text-xs uppercase tracking-wide text-gray-400">
             Tu rol: {role === 'organizer' ? 'Organizador' : role === 'moderator' ? 'Moderador' : role === 'contributor' ? 'Invitado (podés subir)' : 'Solo ver'}
           </p>
+          {uploadAvailable && (
+            <p className="mt-1 text-xs text-gray-400">
+              {displayName ? (
+                <>
+                  Participás como <span className="font-semibold text-gray-600">{displayName}</span>
+                  {' · '}
+                  <button onClick={() => setNameModalOpen(true)} className="underline hover:text-brand">
+                    cambiar
+                  </button>
+                </>
+              ) : (
+                <button onClick={() => setNameModalOpen(true)} className="underline hover:text-brand">
+                  Identificate para que tus fotos lleven tu nombre
+                </button>
+              )}
+            </p>
+          )}
         </div>
 
         {mediaTotal > 0 && (
@@ -967,6 +1059,10 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
           onClose={closeUploadModal}
         />
       )}
+
+      {nameModalOpen && (
+        <NameModal initialValue={displayName ?? ''} onSave={handleSaveName} onSkip={handleSkipName} />
+      )}
     </main>
   );
 }
@@ -1104,6 +1200,15 @@ function Thumbnail({
             >
               Borrar
             </button>
+          )}
+
+          {item.uploader_label && (
+            // pointer-events-none a propósito: es solo informativo, nunca debe
+            // poder "robarle" el toque al recuadro (mismo motivo que el bug del
+            // botón "Borrar" en fotos horizontales — ver comentario más arriba).
+            <span className="pointer-events-none absolute bottom-2 right-2 max-w-[65%] truncate rounded-full bg-black/40 px-2 py-1 text-[10px] font-medium text-white/90 backdrop-blur-sm">
+              {item.uploader_label}
+            </span>
           )}
         </>
       )}
@@ -1336,6 +1441,167 @@ function UploadModal({
   );
 }
 
+/* ---------- Editor de encuadre de la portada (arrastrar para centrar) ---------- */
+
+function CoverPositionEditor({
+  imageUrl,
+  initialX,
+  initialY,
+  onCancel,
+  onSave,
+}: {
+  imageUrl: string;
+  initialX: number;
+  initialY: number;
+  onCancel: () => void;
+  onSave: (x: number, y: number) => void;
+}) {
+  const [pos, setPos] = useState({ x: initialX, y: initialY });
+  const frameRef = useRef<HTMLDivElement>(null);
+  const naturalSizeRef = useRef<{ width: number; height: number } | null>(null);
+  const dragRef = useRef<{ startX: number; startY: number; startPos: { x: number; y: number } } | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  function handlePointerDown(e: React.PointerEvent<HTMLImageElement>) {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { startX: e.clientX, startY: e.clientY, startPos: pos };
+    setDragging(true);
+  }
+
+  function handlePointerMove(e: React.PointerEvent<HTMLImageElement>) {
+    const drag = dragRef.current;
+    const frame = frameRef.current;
+    const natural = naturalSizeRef.current;
+    if (!drag || !frame || !natural) return;
+
+    const frameRect = frame.getBoundingClientRect();
+    // Con object-fit: cover, la imagen se escala hasta cubrir el recuadro
+    // por el lado que haga falta — este es el mismo cálculo que hace el
+    // navegador para eso, así podemos saber cuánto "sobra" para arrastrar.
+    const scale = Math.max(frameRect.width / natural.width, frameRect.height / natural.height);
+    const renderedWidth = natural.width * scale;
+    const renderedHeight = natural.height * scale;
+    const overflowX = Math.max(renderedWidth - frameRect.width, 0);
+    const overflowY = Math.max(renderedHeight - frameRect.height, 0);
+
+    const deltaX = e.clientX - drag.startX;
+    const deltaY = e.clientY - drag.startY;
+    // Arrastrar la imagen hacia la derecha/abajo debe revelar lo que estaba
+    // tapado a la izquierda/arriba — por eso el signo negativo.
+    const deltaPercentX = overflowX > 0 ? (-deltaX / overflowX) * 100 : 0;
+    const deltaPercentY = overflowY > 0 ? (-deltaY / overflowY) * 100 : 0;
+
+    setPos({
+      x: Math.min(100, Math.max(0, drag.startPos.x + deltaPercentX)),
+      y: Math.min(100, Math.max(0, drag.startPos.y + deltaPercentY)),
+    });
+  }
+
+  function handlePointerUp(e: React.PointerEvent<HTMLImageElement>) {
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    dragRef.current = null;
+    setDragging(false);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-lg rounded-2xl bg-paper p-5 shadow-2xl">
+        <h2 className="font-serif-title text-xl text-brand-dark">Ajustar portada</h2>
+        <p className="mt-1 text-xs text-gray-500">Arrastrá la imagen para centrarla como quieras.</p>
+
+        <div
+          ref={frameRef}
+          className="relative mt-4 h-40 w-full overflow-hidden rounded-xl bg-gray-100 sm:h-56"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={imageUrl}
+            alt=""
+            draggable={false}
+            onLoad={(e) => {
+              naturalSizeRef.current = {
+                width: e.currentTarget.naturalWidth,
+                height: e.currentTarget.naturalHeight,
+              };
+            }}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            style={{ objectPosition: `${pos.x}% ${pos.y}%`, touchAction: 'none' }}
+            className={`absolute inset-0 h-full w-full select-none object-cover ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+          />
+        </div>
+
+        <div className="mt-5 flex gap-2">
+          <button
+            onClick={onCancel}
+            className="flex-1 rounded-lg border border-gray-300 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={() => onSave(pos.x, pos.y)}
+            className="flex-1 rounded-lg bg-brand py-2.5 text-sm font-semibold text-white hover:bg-brand-dark"
+          >
+            Guardar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Modal para identificarse con nombre (antes de subir) ---------- */
+
+function NameModal({
+  initialValue,
+  onSave,
+  onSkip,
+}: {
+  initialValue: string;
+  onSave: (name: string) => void;
+  onSkip: () => void;
+}) {
+  const [value, setValue] = useState(initialValue);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSave(value);
+        }}
+        className="w-full max-w-sm rounded-2xl bg-paper p-6 shadow-2xl"
+      >
+        <h2 className="font-serif-title text-xl text-brand-dark">¿Cómo te llamás?</h2>
+        <p className="mt-1 text-sm text-gray-500">
+          Así tus fotos y videos quedan con tu nombre — para que se sepa quién sacó cada toma.
+        </p>
+        <input
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="Tu nombre"
+          maxLength={60}
+          className="mt-4 w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-brand focus:outline-none"
+        />
+        <div className="mt-5 flex flex-col gap-2">
+          <button
+            type="submit"
+            disabled={!value.trim()}
+            className="w-full rounded-lg bg-brand py-2.5 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-40"
+          >
+            Guardar
+          </button>
+          <button type="button" onClick={onSkip} className="text-xs text-gray-400 underline hover:text-gray-600">
+            Prefiero no decirlo
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 /* ---------- Visor en popup (lightbox) ---------- */
 
 function Lightbox({
@@ -1519,6 +1785,7 @@ function Lightbox({
             </span>
           )}
         </div>
+        {item.uploader_label && <p className="text-xs text-white/50">Subido por {item.uploader_label}</p>}
       </div>
     </div>
   );

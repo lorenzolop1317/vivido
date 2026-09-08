@@ -15,11 +15,15 @@ create table if not exists albums (
   upload_window_days int default 14, -- null = sin ventana fija (plan pago)
   retention_days int default 30, -- null = retención indefinida (plan pago)
   cover_image_key text, -- imagen de portada ("membrete") del álbum, opcional
+  cover_position_x real not null default 50, -- 0-100, encuadre horizontal de la portada (ver AlbumWorkspace.tsx)
+  cover_position_y real not null default 50, -- 0-100, encuadre vertical de la portada
   created_at timestamptz not null default now()
 );
 
--- Por si esta tabla ya existía de una versión anterior sin esta columna:
+-- Por si esta tabla ya existía de una versión anterior sin estas columnas:
 alter table albums add column if not exists cover_image_key text;
+alter table albums add column if not exists cover_position_x real not null default 50;
+alter table albums add column if not exists cover_position_y real not null default 50;
 
 create table if not exists album_tokens (
   token text primary key,

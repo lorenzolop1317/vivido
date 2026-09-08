@@ -35,6 +35,8 @@ export interface AlbumRow {
   upload_window_days: number | null;
   retention_days: number | null;
   cover_image_key: string | null;
+  cover_position_x: number;
+  cover_position_y: number;
   created_at: string;
 }
 
@@ -459,13 +461,49 @@ export async function confirmCoverImage(token: string, key: string): Promise<{ o
   }
 
   const supabase = getSupabaseAdmin();
-  const { error } = await supabase.from('albums').update({ cover_image_key: key }).eq('id', album.id);
+  // Al confirmar una foto nueva reseteamos el encuadre a 50/50 — la posición
+  // que se había ajustado era para la imagen anterior, no tiene sentido
+  // mantenerla en la nueva.
+  const { error } = await supabase
+    .from('albums')
+    .update({ cover_image_key: key, cover_position_x: 50, cover_position_y: 50 })
+    .eq('id', album.id);
   if (error) throw error;
 
   const previousKey = album.cover_image_key;
   if (previousKey && previousKey !== key) {
     await deleteObject(previousKey).catch(() => {});
   }
+
+  return { ok: true };
+}
+
+/** Ajusta el encuadre (qué parte se ve) de la portada ya subida. */
+export async function setCoverPosition(
+  token: string,
+  x: number,
+  y: number
+): Promise<{ ok: boolean; reason?: string }> {
+  const resolved = await resolveToken(token);
+  if (!resolved) return { ok: false, reason: 'Enlace inválido.' };
+  const { role, album } = resolved;
+
+  if (role !== 'organizer' && role !== 'moderator') {
+    return { ok: false, reason: 'No tenés permiso para cambiar la portada de este álbum.' };
+  }
+  if (!album.cover_image_key) {
+    return { ok: false, reason: 'Este álbum todavía no tiene portada.' };
+  }
+
+  const clampedX = Math.min(100, Math.max(0, x));
+  const clampedY = Math.min(100, Math.max(0, y));
+
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase
+    .from('albums')
+    .update({ cover_position_x: clampedX, cover_position_y: clampedY })
+    .eq('id', album.id);
+  if (error) throw error;
 
   return { ok: true };
 }
@@ -481,7 +519,10 @@ export async function removeCoverImage(token: string): Promise<{ ok: boolean; re
   }
 
   const supabase = getSupabaseAdmin();
-  const { error } = await supabase.from('albums').update({ cover_image_key: null }).eq('id', album.id);
+  const { error } = await supabase
+    .from('albums')
+    .update({ cover_image_key: null, cover_position_x: 50, cover_position_y: 50 })
+    .eq('id', album.id);
   if (error) throw error;
 
   if (album.cover_image_key) {
