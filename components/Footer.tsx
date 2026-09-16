@@ -25,9 +25,30 @@ function MailIcon({ className }: { className?: string }) {
 
 type FormState = 'idle' | 'sending' | 'sent' | 'error';
 
-export default function Footer({ brand = 'vivido', lang = 'es' }: { brand?: BrandKey; lang?: Lang }) {
+export default function Footer({
+  brand = 'vivido',
+  lang = 'es',
+  showContactForm = true,
+}: {
+  brand?: BrandKey;
+  lang?: Lang;
+  // Vívido siempre lo deja en true (comportamiento de siempre, sin cambios).
+  // Divine Tables lo apaga en la página de creación y para quien organiza o
+  // modera un álbum — el formulario de contacto queda solo para quien entra
+  // como invitado o a mirar, que es quien de verdad puede necesitar escribirle
+  // a Divine Tables desde ahí.
+  showContactForm?: boolean;
+}) {
   const config = BRANDS[brand];
   const t = LANDING_STRINGS[lang];
+  // LANDING_STRINGS.es es el texto original de Vívido (voseo rioplatense) —
+  // se reusa tal cual para no tocar nada de Vívido. Divine Tables atiende
+  // público latinoamericano en general, así que acá se pisan puntualmente
+  // las frases que suenan marcadamente argentinas, sin crear un diccionario
+  // "es" paralelo entero por dos frases.
+  const contactTitle = brand === 'divine_tables' && lang === 'es' ? 'Escríbenos' : t.contactTitle;
+  const contactMessagePlaceholder =
+    brand === 'divine_tables' && lang === 'es' ? 'Cuéntanos en qué te podemos ayudar' : t.contactMessage;
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [message, setMessage] = useState('');
@@ -56,40 +77,57 @@ export default function Footer({ brand = 'vivido', lang = 'es' }: { brand?: Bran
     }
   }
 
+  const brandInfo = (
+    <>
+      {config.logoLockup ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={config.logoLockup} alt={config.name} className="h-16 w-auto sm:h-20" />
+      ) : (
+        <p className="font-display text-2xl text-brand-dark">{config.name}</p>
+      )}
+      <p className="mt-2 max-w-xs text-sm text-gray-500">{config.tagline}</p>
+      <div className="mt-4 space-y-1.5 text-sm text-gray-600">
+        <a href={`mailto:${config.contactEmail}`} className="flex items-center gap-2 hover:text-brand">
+          <MailIcon className="h-4 w-4" />
+          {config.contactEmail}
+        </a>
+        {config.instagram && (
+          <a
+            href="https://instagram.com"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-2 hover:text-brand"
+          >
+            <InstagramIcon className="h-4 w-4" />@{config.instagram}
+          </a>
+        )}
+      </div>
+      <p className="mt-6 text-xs text-gray-400">
+        © {new Date().getFullYear()} {config.name}. Todos los derechos reservados.
+      </p>
+    </>
+  );
+
+  if (!showContactForm) {
+    // Sin el formulario, la misma info a dos columnas queda pegada a la
+    // izquierda con un hueco vacío al lado — acá va centrada y en una sola
+    // columna, más prolijo cuando es lo único que hay en el pie de página.
+    return (
+      <footer className="mt-16 border-t border-gray-200 bg-white/60">
+        <div className="mx-auto flex max-w-md flex-col items-center px-4 py-10 text-center sm:px-6">
+          {brandInfo}
+        </div>
+      </footer>
+    );
+  }
+
   return (
     <footer className="mt-16 border-t border-gray-200 bg-white/60">
       <div className="mx-auto grid max-w-5xl gap-10 px-4 py-10 sm:px-6 md:grid-cols-2">
-        <div>
-          {config.logoLockup ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={config.logoLockup} alt={config.name} className="h-16 w-auto sm:h-20" />
-          ) : (
-            <p className="font-display text-2xl text-brand-dark">{config.name}</p>
-          )}
-          <p className="mt-2 max-w-xs text-sm text-gray-500">{config.tagline}</p>
-          <div className="mt-4 space-y-1.5 text-sm text-gray-600">
-            <a href={`mailto:${config.contactEmail}`} className="flex items-center gap-2 hover:text-brand">
-              <MailIcon className="h-4 w-4" />
-              {config.contactEmail}
-            </a>
-            {config.instagram && (
-              <a
-                href="https://instagram.com"
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-2 hover:text-brand"
-              >
-                <InstagramIcon className="h-4 w-4" />@{config.instagram}
-              </a>
-            )}
-          </div>
-          <p className="mt-6 text-xs text-gray-400">
-            © {new Date().getFullYear()} {config.name}. Todos los derechos reservados.
-          </p>
-        </div>
+        <div>{brandInfo}</div>
 
         <div>
-          <p className="text-sm font-semibold text-brand-dark">{t.contactTitle}</p>
+          <p className="text-sm font-semibold text-brand-dark">{contactTitle}</p>
           {state === 'sent' ? (
             <p className="mt-3 rounded-lg bg-green-50 p-3 text-sm text-green-700">{t.contactSent}</p>
           ) : (
@@ -115,7 +153,7 @@ export default function Footer({ brand = 'vivido', lang = 'es' }: { brand?: Bran
                 required
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                placeholder={t.contactMessage}
+                placeholder={contactMessagePlaceholder}
                 rows={3}
                 className="w-full resize-none rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
               />

@@ -48,7 +48,7 @@ export default function DivineTablesHome() {
         </div>
         <CreateAlbumForm brand="divine_tables" lang={lang} />
       </main>
-      <Footer brand="divine_tables" lang={lang} />
+      <Footer brand="divine_tables" lang={lang} showContactForm={false} />
     </div>
   );
 }

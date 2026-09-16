@@ -24,11 +24,12 @@ function formatDate(iso: string | null) {
 }
 
 const GB = 1024 * 1024 * 1024;
-// Presets rápidos para el tope de un álbum puntual. No hay eventos simultáneos
-// en esta fase beta, así que subirle el límite a uno no compromete a los demás
-// — solo hay que no pasarse de la capa gratis de R2 en total (ver el visor de
-// espacio de arriba).
-const STORAGE_LIMIT_PRESETS_GB = [3, 5, 7, 10, 15, 20];
+const MB = 1024 * 1024;
+// Mismos topes de sanidad que valida el servidor (lib/albums.ts,
+// setAlbumStorageLimit) — se usan acá solo para no dejar mandar un valor que
+// el servidor va a rechazar igual.
+const MIN_STORAGE_LIMIT_MB = 512;
+const MAX_STORAGE_LIMIT_MB = 20 * 1024;
 
 type BrandFilter = 'all' | BrandKey;
 
@@ -40,6 +41,7 @@ export default function AdminDashboard({ initialAlbums }: { initialAlbums: Admin
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [storageUnit, setStorageUnit] = useState<'GB' | 'MB'>('GB');
 
   const filtered = useMemo(
     () => (brandFilter === 'all' ? albums : albums.filter((a) => a.brand === brandFilter)),
@@ -282,12 +284,20 @@ export default function AdminDashboard({ initialAlbums }: { initialAlbums: Admin
 
                   <div className="flex shrink-0 flex-wrap items-center gap-2">
                     {album.organizerLink && (
-                      <button
-                        onClick={() => copyOrganizerLink(album)}
-                        className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
-                      >
-                        {copiedId === album.id ? 'Copiado' : 'Copiar enlace organizador'}
-                      </button>
+                      <>
+                        <a
+                          href={`/api/albums/${album.organizerLink.replace('/a/', '')}/export`}
+                          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                        >
+                          Download Data
+                        </a>
+                        <button
+                          onClick={() => copyOrganizerLink(album)}
+                          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                        >
+                          {copiedId === album.id ? 'Copiado' : 'Copiar enlace organizador'}
+                        </button>
+                      </>
                     )}
                     <button
                       onClick={() => handleDelete(album)}
@@ -325,22 +335,46 @@ export default function AdminDashboard({ initialAlbums }: { initialAlbums: Admin
 
                   <label className="flex items-center gap-2 text-sm text-gray-700">
                     Tope de este álbum
-                    <select
-                      value={Math.round(album.storageLimitBytes / GB)}
+                    <input
+                      key={`${album.id}-${album.storageLimitBytes}-${storageUnit}`}
+                      type="number"
+                      min={storageUnit === 'GB' ? MIN_STORAGE_LIMIT_MB / 1024 : MIN_STORAGE_LIMIT_MB}
+                      max={storageUnit === 'GB' ? MAX_STORAGE_LIMIT_MB / 1024 : MAX_STORAGE_LIMIT_MB}
+                      step={storageUnit === 'GB' ? 1 : 50}
+                      defaultValue={
+                        storageUnit === 'GB'
+                          ? Math.round((album.storageLimitBytes / GB) * 10) / 10
+                          : Math.round(album.storageLimitBytes / MB)
+                      }
                       disabled={busy}
-                      onChange={(e) => updateStorageLimit(album, Number(e.target.value) * GB)}
-                      className="rounded-lg border border-gray-300 bg-white px-2 py-1 text-sm disabled:opacity-50"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                      }}
+                      onBlur={(e) => {
+                        const value = parseFloat(e.target.value);
+                        const bytes = Math.round(value * (storageUnit === 'GB' ? GB : MB));
+                        const minBytes = MIN_STORAGE_LIMIT_MB * MB;
+                        const maxBytes = MAX_STORAGE_LIMIT_MB * MB;
+                        if (!Number.isFinite(value) || bytes < minBytes || bytes > maxBytes) {
+                          setError(
+                            `El tope tiene que estar entre ${MIN_STORAGE_LIMIT_MB} MB y ${MAX_STORAGE_LIMIT_MB / 1024} GB.`
+                          );
+                          e.target.value = String(
+                            storageUnit === 'GB' ? album.storageLimitBytes / GB : Math.round(album.storageLimitBytes / MB)
+                          );
+                          return;
+                        }
+                        if (bytes !== album.storageLimitBytes) updateStorageLimit(album, bytes);
+                      }}
+                      className="w-24 rounded-lg border border-gray-300 bg-white px-2 py-1 text-sm disabled:opacity-50"
+                    />
+                    <select
+                      value={storageUnit}
+                      onChange={(e) => setStorageUnit(e.target.value as 'GB' | 'MB')}
+                      className="rounded-lg border border-gray-300 bg-white px-2 py-1 text-sm"
                     >
-                      {STORAGE_LIMIT_PRESETS_GB.map((gb) => (
-                        <option key={gb} value={gb}>
-                          {gb} GB
-                        </option>
-                      ))}
-                      {!STORAGE_LIMIT_PRESETS_GB.includes(Math.round(album.storageLimitBytes / GB)) && (
-                        <option value={Math.round(album.storageLimitBytes / GB)}>
-                          {(album.storageLimitBytes / GB).toFixed(1)} GB
-                        </option>
-                      )}
+                      <option value="GB">GB</option>
+                      <option value="MB">MB</option>
                     </select>
                   </label>
                 </div>

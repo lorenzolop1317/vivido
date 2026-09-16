@@ -1116,7 +1116,11 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
         <NameModal initialValue={displayName ?? ''} lang={lang} onSave={handleSaveName} onSkip={handleSkipName} />
       )}
       </main>
-      <Footer brand={album.brand} lang={lang} />
+      <Footer
+        brand={album.brand}
+        lang={lang}
+        showContactForm={album.brand === 'divine_tables' ? role === 'contributor' || role === 'viewer' : true}
+      />
     </div>
   );
 }

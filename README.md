@@ -83,24 +83,43 @@ supabase/schema.sql       esquema de base de datos, para pegar en Supabase
    - `Secret Access Key` → `R2_SECRET_ACCESS_KEY`
    - Nombre del bucket → `R2_BUCKET_NAME`
 
-### 3. Resend (opcional — envío de invitaciones por email)
+### 3. Envío de invitaciones por email (opcional)
 Sin este paso la app funciona igual; solo que el botón de "enviar invitaciones por email"
-(pantalla de álbum creado) muestra un aviso en vez de mandar nada. Cuando quieras activarlo:
+(pantalla de álbum creado) muestra un aviso en vez de mandar nada. Hay dos formas de activarlo
+— alcanza con una de las dos:
+
+**Opción A — Gmail (recomendado mientras no tengas un dominio propio, y no quieras pagar uno).**
+No hace falta comprar nada, solo una cuenta de Gmail (puede ser una que ya uses, o una nueva
+solo para esto):
+1. Entrar a [myaccount.google.com/security](https://myaccount.google.com/security) y activar
+   la **verificación en dos pasos** si todavía no la tenés activada (Google exige esto para
+   poder generar el siguiente punto).
+2. Ir a [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords), crear
+   una "contraseña de aplicación" (elegí cualquier nombre, ej. "Vívido") y copiar el código de
+   16 letras que te da — **no es** la contraseña normal de tu Gmail.
+3. Variables de entorno: `GMAIL_USER` = tu dirección de Gmail completa, `GMAIL_APP_PASSWORD` =
+   ese código de 16 letras (sin espacios).
+4. Límite a tener en cuenta: Gmail deja mandar hasta ~500 emails por día por cuenta — de sobra
+   para esta fase beta con vos como único super usuario y sin eventos simultáneos.
+
+**Opción B — Resend (para más adelante, si en algún momento comprás un dominio propio).**
+Da mejor entregabilidad (menos chance de caer en spam) y un tope de envío más alto, pero
+necesita un dominio verificado — no se puede usar el subdominio gratuito de Vercel
+(`vivido-eight.vercel.app`) porque no es un dominio del que tengas control del DNS:
 1. Crear cuenta gratis en [resend.com](https://resend.com) (capa gratis: 3.000 emails/mes,
-   100/día — de sobra para esta fase).
-2. En **Domains**, agregar un dominio propio tuyo (ej. `vivido.app`, o el que tengas) y cargar
-   en tu proveedor de DNS los 2-3 registros que Resend te muestra (SPF/DKIM). Esto es necesario
-   para poder mandarle a cualquier invitado — sin un dominio verificado, Resend solo deja
-   mandarte emails de prueba a vos mismo.
-   - Si Divine Tables no tiene dominio propio (hoy usa una cuenta de Gmail para contacto), no
-     hace falta verificar uno para cada marca por separado: alcanza con verificar **un solo**
-     dominio (el que tengas, ej. `vivido.app`) y usar una dirección de ese dominio como
-     remitente para las invitaciones de las dos marcas — el nombre que ve el invitado
-     ("De: Divine Tables <invitaciones@vivido.app>") igual sale de la marca del álbum, y las
-     respuestas llegan al email de contacto de esa marca (`lib/brands.ts`), no al tuyo.
-3. En **API Keys**, crear una y copiarla → variable `RESEND_API_KEY`.
-4. Elegir una dirección de ese dominio verificado (ej. `invitaciones@vivido.app`) → variable
+   100/día).
+2. En **Domains**, agregar el dominio que compres (ej. `vivido.app`) y cargar en el DNS de
+   donde lo compraste los 2-3 registros que Resend te muestra (SPF/DKIM).
+   - Alcanza con verificar **un solo** dominio para las dos marcas: usás una dirección de ese
+     dominio como remitente para ambas, y el nombre que ve el invitado sigue siendo el de la
+     marca del álbum ("De: Divine Tables <invitaciones@vivido.app>"); las respuestas llegan al
+     email de contacto de esa marca (`lib/brands.ts`), no al tuyo.
+3. En **API Keys**, crear una → variable `RESEND_API_KEY`.
+4. Una dirección de ese dominio verificado (ej. `invitaciones@vivido.app`) → variable
    `RESEND_FROM_EMAIL`.
+
+Si cargás las dos opciones a la vez, la app usa Resend (queda como la opción "de arriba" para
+cuando decidas pasarte).
 
 ### 4. Variables de entorno
 Copiar `.env.example` a `.env.local` y completar los valores de los pasos anteriores, más un
@@ -158,11 +177,15 @@ Desde el panel podés:
   facturación de Cloudflare.
 - Crear un álbum nuevo de cualquiera de las dos marcas (botones directos a `/vivido` y
   `/divine-tables`).
-- Subir (o bajar) el tope de almacenamiento de un álbum puntual (selector con presets de 3 a
-  20 GB en cada tarjeta) — para cuando un evento concreto necesita más de los 3 GB del plan
-  gratis. Es manual álbum por álbum a propósito: como no hay eventos simultáneos en esta fase
-  beta, subirle el límite a uno no compromete a los demás — solo hay que vigilar el total
-  contra la capa gratis de R2 (el visor de espacio de arriba).
+- Subir (o bajar) el tope de almacenamiento de un álbum puntual — un campo numérico en cada
+  tarjeta (con selector GB/MB) donde escribís directamente el número que quieras (3, 4, 5... o
+  un valor puntual en MB si hace falta más precisión), entre 512 MB y 20 GB. Es manual álbum
+  por álbum a propósito: como no hay eventos simultáneos en esta fase beta, subirle el límite a
+  uno no compromete a los demás — solo hay que vigilar el total contra la capa gratis de R2 (el
+  visor de espacio de arriba). El valor se aplica al perder el foco del campo (o con Enter).
+- Descargar directamente todas las fotos/videos que subieron los invitados de un álbum
+  puntual (botón "Download Data" en cada tarjeta) — arma un .zip con los archivos originales,
+  igual que el botón de descarga que ya tiene el organizador dentro de su propio álbum.
 - Prender o apagar el auto-borrado álbum por álbum (el interruptor "Auto-borrado por
   antigüedad").
 - Borrar un álbum por completo (fotos/videos en Cloudflare R2 + el álbum en la base) para

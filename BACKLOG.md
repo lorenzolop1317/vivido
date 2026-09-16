@@ -19,12 +19,21 @@ notas sueltas para más adelante:
   página de creación de Divine Tables ahora usa su logo y nombre, no los de
   Vívido. Vívido no se tocó (sigue heredando el manifest de `app/layout.tsx`).
 - ~~**Tope de almacenamiento editable por álbum**~~ — implementado: el panel
-  de super usuario deja subir/bajar el límite de un álbum puntual (presets de
-  3 a 20 GB) desde un selector en cada tarjeta (`setAlbumStorageLimit` en
-  `lib/albums.ts`, PATCH en `app/api/admin/albums/[id]/route.ts`). Sigue
-  siendo manual álbum por álbum — no hay una alarma automática si la suma de
-  todos los álbumes se acerca a la capa gratis de R2 (10 GB), solo el visor
-  de espacio total que ya existía en el panel.
+  de super usuario deja subir/bajar el límite de un álbum puntual desde un
+  campo numérico libre en cada tarjeta (con selector GB/MB, para poder pedir
+  cualquier valor — 3, 4, 5 GB... o una cifra puntual en MB), entre 512 MB y
+  20 GB (`setAlbumStorageLimit` en `lib/albums.ts`, PATCH en
+  `app/api/admin/albums/[id]/route.ts`; primero se probó con presets fijos
+  de 3/5/7/10/15/20 GB pero se cambió a campo libre porque no daba el
+  control fino que hacía falta para administrar el espacio entre álbumes).
+  Sigue siendo manual álbum por álbum — no hay una alarma automática si la
+  suma de todos los álbumes se acerca a la capa gratis de R2 (10 GB), solo
+  el visor de espacio total que ya existía en el panel.
+- ~~**Descargar el contenido de un álbum desde el panel de admin**~~ —
+  implementado: botón "Download Data" en cada tarjeta del panel, que arma y
+  descarga un .zip con todo lo que subieron los invitados (reusa el mismo
+  endpoint de exportación que ya usaba el organizador desde su propio álbum,
+  `app/api/albums/[token]/export/route.ts`).
 - ~~**QR del enlace de invitados**~~ — implementado: en la pantalla de "álbum
   creado", el enlace de invitados tiene un botón "Ver código QR" que genera
   el QR en el momento (librería `qrcode`, cliente) y permite descargarlo como
@@ -42,14 +51,38 @@ notas sueltas para más adelante:
   mensajes solo se guardan en la tabla `contact_messages` de Supabase (se
   revisan desde ahí). Conectar un servicio (Resend, SendGrid, etc.) cuando
   haga falta notificación por email.
-- ~~**Envío masivo por email a la lista de invitados**~~ — implementado con
-  Resend (`lib/mailer.ts`, `lib/emailTemplates.ts`, `lib/guestList.ts`,
+- ~~**Formulario de contacto solo donde corresponde, en Divine Tables**~~ —
+  implementado (`components/Footer.tsx`, prop `showContactForm`): en la
+  página de creación (`/divine-tables`) ya no aparece el formulario "¿Nos
+  escribís?" — solo el logo, slogan, redes y copyright, reacomodados en una
+  columna centrada en vez de quedar pegados a la izquierda con un hueco al
+  lado. Dentro de un álbum de Divine Tables, el formulario solo se muestra
+  para quien entra como invitado o a mirar (roles `contributor`/`viewer`) —
+  quien organiza o modera no lo ve. Vívido no se tocó: sigue mostrando el
+  formulario en todos lados como siempre (el prop por defecto es `true`).
+  De paso se corrigieron dos frases que sonaban marcadamente argentinas
+  ("¿Nos escribís?" → "Escríbenos", "Contanos en qué te podemos ayudar" →
+  "Cuéntanos en qué te podemos ayudar") **solo para Divine Tables** — el
+  diccionario `es` de `lib/i18n.ts` es compartido con Vívido y no se tocó,
+  así que estos dos casos se resuelven con un pequeño override dentro de
+  `Footer.tsx` en vez de editar el diccionario. Si más adelante aparecen
+  más frases con voseo en el resto del texto de Divine Tables (fuera del
+  footer) y hace falta neutralizarlas también, conviene entonces sí separar
+  un diccionario "es" propio para Divine Tables en `lib/i18n.ts` en vez de
+  seguir sumando overrides sueltos componente por componente.
+- ~~**Envío masivo por email a la lista de invitados**~~ — implementado
+  (`lib/mailer.ts`, `lib/emailTemplates.ts`, `lib/guestList.ts`,
   `app/api/albums/[token]/invite-emails/route.ts`, `components/InviteEmailPanel.tsx`):
   desde la pantalla de "álbum creado", subís un Excel/CSV con nombre + email,
   configurás asunto/remitente/texto en un popup, y se manda uno por uno con
-  el look de la marca + QR + enlace. Pendiente de tu lado: crear la cuenta de
-  Resend y verificar un dominio (ver README, "Puesta en marcha" → paso 3) —
-  sin eso el botón de enviar avisa que falta configurarlo, no rompe nada.
+  el look de la marca + QR + enlace. Soporta dos proveedores — `lib/mailer.ts`
+  elige automáticamente según qué variables estén cargadas: **Gmail** (una
+  cuenta de Gmail + contraseña de aplicación, sin dominio propio — la que
+  estás usando ahora en la fase beta) o **Resend** (mejor entregabilidad,
+  para cuando en algún momento haya un dominio propio verificado). Ver
+  README, "Puesta en marcha" → paso 3, para el paso a paso de cualquiera de
+  las dos. Sin ninguna configurada, el botón de enviar avisa que falta
+  configurarlo, no rompe nada.
   Nota técnica: el parseo del Excel corre en el navegador con la librería
   `xlsx` de npm, que tiene un advisory de seguridad conocido (sin parche en
   el registro de npm) — el riesgo real acá es mínimo porque es siempre el
