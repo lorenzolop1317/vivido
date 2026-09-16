@@ -17,6 +17,14 @@ create table if not exists albums (
   cover_image_key text, -- imagen de portada ("membrete") del álbum, opcional
   cover_position_x real not null default 50, -- 0-100, encuadre horizontal de la portada (ver AlbumWorkspace.tsx)
   cover_position_y real not null default 50, -- 0-100, encuadre vertical de la portada
+  brand text not null default 'vivido' check (brand in ('vivido', 'divine_tables')), -- marca bajo la que se creó (ver lib/brands.ts)
+  -- Apagado por defecto mientras estamos en fase beta probando a fondo (un
+  -- solo super usuario, ver app/admin/[secret] y lib/admin-auth.ts): con esto
+  -- en false el álbum nunca se archiva/borra solo aunque pasen los
+  -- retention_days. Se prende álbum por álbum desde el panel de super usuario
+  -- (funciones de administración en lib/albums.ts) cuando haga falta el
+  -- comportamiento normal (ej. álbumes reales de clientas de Divine Tables).
+  retention_enabled boolean not null default false,
   created_at timestamptz not null default now()
 );
 
@@ -24,6 +32,13 @@ create table if not exists albums (
 alter table albums add column if not exists cover_image_key text;
 alter table albums add column if not exists cover_position_x real not null default 50;
 alter table albums add column if not exists cover_position_y real not null default 50;
+alter table albums add column if not exists brand text not null default 'vivido';
+alter table albums add column if not exists retention_enabled boolean not null default false;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'albums_brand_check') then
+    alter table albums add constraint albums_brand_check check (brand in ('vivido', 'divine_tables'));
+  end if;
+end $$;
 
 create table if not exists album_tokens (
   token text primary key,
@@ -79,8 +94,11 @@ create table if not exists contact_messages (
   name text not null,
   email text not null,
   message text not null,
+  brand text not null default 'vivido', -- desde qué marca se envió (ver lib/brands.ts)
   created_at timestamptz not null default now()
 );
+
+alter table contact_messages add column if not exists brand text not null default 'vivido';
 
 -- Row Level Security queda deshabilitada a propósito: todo el acceso pasa por las
 -- API routes de Next.js usando la Service Role Key (ver lib/supabase.ts). Los

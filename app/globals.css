@@ -12,27 +12,38 @@
   --color-ink: #2a2019;
 }
 
+/*
+ * Tipografía "de marca" como variable aparte (no es un token de color, así
+ * que va fuera de @theme). Por defecto es la de Vívido; components/BrandTheme.tsx
+ * la pisa en el navegador para álbumes de otra marca (ej. Divine Tables usa
+ * Playfair Display en vez de Instrument Serif) — el resto de la tipografía
+ * del cuerpo se mantiene igual entre marcas.
+ */
+:root {
+  --font-display: 'Instrument Serif', Georgia, serif;
+}
+
 html,
 body {
   height: 100%;
 }
 
 body {
-  background-color: #f6efe4; /* papel */
-  color: #2a2019; /* tinta */
+  background-color: var(--color-paper);
+  color: var(--color-ink);
   font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
 }
 
 .font-display {
-  font-family: 'Instrument Serif', Georgia, serif;
+  font-family: var(--font-display);
   font-style: italic;
 }
 
 /* Mismo serif que .font-display pero sin itálica — para títulos de contenido
    (ej. el nombre del evento dentro de un álbum), donde la itálica del logo
-   queda demasiado decorativa. La itálica se reserva para la marca "Vívido". */
+   queda demasiado decorativa. La itálica se reserva para el wordmark de marca. */
 .font-serif-title {
-  font-family: 'Instrument Serif', Georgia, serif;
+  font-family: var(--font-display);
   font-style: normal;
 }
 

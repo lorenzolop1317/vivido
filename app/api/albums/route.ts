@@ -13,6 +13,7 @@ export async function POST(request: NextRequest) {
     name,
     eventDate: typeof body?.eventDate === 'string' ? body.eventDate : null,
     location: typeof body?.location === 'string' ? body.location : null,
+    brand: body?.brand === 'divine_tables' ? 'divine_tables' : 'vivido',
   });
 
   return NextResponse.json(result, { status: 201 });

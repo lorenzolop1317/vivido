@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import type { BrandKey } from '@/lib/brands';
 
 interface CreateAlbumResponse {
   albumId: string;
@@ -22,7 +23,7 @@ const roleLabels: Record<keyof CreateAlbumResponse['links'], { title: string; hi
   },
 };
 
-export default function CreateAlbumForm() {
+export default function CreateAlbumForm({ brand = 'vivido' }: { brand?: BrandKey }) {
   const [name, setName] = useState('');
   const [eventDate, setEventDate] = useState('');
   const [location, setLocation] = useState('');
@@ -40,7 +41,7 @@ export default function CreateAlbumForm() {
       const res = await fetch('/api/albums', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, eventDate: eventDate || null, location: location || null }),
+        body: JSON.stringify({ name, eventDate: eventDate || null, location: location || null, brand }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'No se pudo crear el álbum.');
@@ -80,9 +81,7 @@ export default function CreateAlbumForm() {
             </div>
           </div>
         ))}
-        <p className="pt-2 text-center text-xs text-gray-400">
-          Plan gratis: 3 GB, videos hasta 60s, 14 días para subir, 30 días de retención total.
-        </p>
+        <p className="pt-2 text-center text-xs text-gray-400">Plan gratis: 3 GB por álbum, videos hasta 60s, 14 días para subir.</p>
       </div>
     );
   }

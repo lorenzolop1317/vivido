@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from './supabase';
+import type { BrandKey } from './brands';
 
 /**
  * Guarda un mensaje del formulario de contacto del pie de página en Supabase
@@ -12,10 +13,12 @@ export async function submitContactMessage(input: {
   name: string;
   email: string;
   message: string;
+  brand?: BrandKey;
 }): Promise<{ ok: boolean; reason?: string }> {
   const name = input.name.trim();
   const email = input.email.trim();
   const message = input.message.trim();
+  const brand: BrandKey = input.brand === 'divine_tables' ? 'divine_tables' : 'vivido';
 
   if (!name || !email || !message) {
     return { ok: false, reason: 'Completá nombre, email y mensaje.' };
@@ -28,7 +31,7 @@ export async function submitContactMessage(input: {
   }
 
   const supabase = getSupabaseAdmin();
-  const { error } = await supabase.from('contact_messages').insert({ name, email, message });
+  const { error } = await supabase.from('contact_messages').insert({ name, email, message, brand });
   if (error) throw error;
 
   return { ok: true };

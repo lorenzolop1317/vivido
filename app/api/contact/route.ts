@@ -8,7 +8,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Solicitud inválida.' }, { status: 400 });
   }
 
-  const result = await submitContactMessage({ name: body.name, email: body.email, message: body.message });
+  const result = await submitContactMessage({
+    name: body.name,
+    email: body.email,
+    message: body.message,
+    brand: body.brand === 'divine_tables' ? 'divine_tables' : 'vivido',
+  });
 
   if (!result.ok) {
     return NextResponse.json({ error: result.reason }, { status: 422 });

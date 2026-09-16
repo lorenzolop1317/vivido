@@ -1,11 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-
-// Datos de contacto de la app — cambiar acá cuando haya un email/teléfono
-// definitivo (o uno propio por marca blanca, si más adelante se arma una
-// versión para otra empresa).
-const CONTACT_EMAIL = 'hola@vivido.app';
+import { BRANDS, type BrandKey } from '@/lib/brands';
 
 function InstagramIcon({ className }: { className?: string }) {
   return (
@@ -28,7 +24,8 @@ function MailIcon({ className }: { className?: string }) {
 
 type FormState = 'idle' | 'sending' | 'sent' | 'error';
 
-export default function Footer() {
+export default function Footer({ brand = 'vivido' }: { brand?: BrandKey }) {
+  const config = BRANDS[brand];
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [message, setMessage] = useState('');
@@ -43,7 +40,7 @@ export default function Footer() {
       const res = await fetch('/api/contact', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, message }),
+        body: JSON.stringify({ name, email, message, brand }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'No se pudo enviar el mensaje.');
@@ -61,26 +58,32 @@ export default function Footer() {
     <footer className="mt-16 border-t border-gray-200 bg-white/60">
       <div className="mx-auto grid max-w-5xl gap-10 px-4 py-10 sm:px-6 md:grid-cols-2">
         <div>
-          <p className="font-display text-2xl text-brand-dark">Vívido</p>
-          <p className="mt-2 max-w-xs text-sm text-gray-500">
-            Un enlace, y todos los que estuvieron suben sus fotos y videos a un mismo álbum. Sin apps, sin login.
-          </p>
+          {config.logoLockup ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={config.logoLockup} alt={config.name} className="h-11 w-auto" />
+          ) : (
+            <p className="font-display text-2xl text-brand-dark">{config.name}</p>
+          )}
+          <p className="mt-2 max-w-xs text-sm text-gray-500">{config.tagline}</p>
           <div className="mt-4 space-y-1.5 text-sm text-gray-600">
-            <a href={`mailto:${CONTACT_EMAIL}`} className="flex items-center gap-2 hover:text-brand">
+            <a href={`mailto:${config.contactEmail}`} className="flex items-center gap-2 hover:text-brand">
               <MailIcon className="h-4 w-4" />
-              {CONTACT_EMAIL}
+              {config.contactEmail}
             </a>
-            <a
-              href="https://instagram.com"
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-2 hover:text-brand"
-            >
-              <InstagramIcon className="h-4 w-4" />
-              @vivido.app
-            </a>
+            {config.instagram && (
+              <a
+                href="https://instagram.com"
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-2 hover:text-brand"
+              >
+                <InstagramIcon className="h-4 w-4" />@{config.instagram}
+              </a>
+            )}
           </div>
-          <p className="mt-6 text-xs text-gray-400">© {new Date().getFullYear()} Vívido. Todos los derechos reservados.</p>
+          <p className="mt-6 text-xs text-gray-400">
+            © {new Date().getFullYear()} {config.name}. Todos los derechos reservados.
+          </p>
         </div>
 
         <div>

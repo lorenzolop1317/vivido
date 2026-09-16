@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AlbumViewModel, MediaItem } from '@/lib/albums';
+import { BRANDS } from '@/lib/brands';
+import BrandTheme from './BrandTheme';
+import Footer from './Footer';
 
 const DEVICE_ID_KEY = 'event-album:device-id';
 const DISPLAY_NAME_KEY = 'event-album:display-name';
@@ -751,9 +754,12 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
   const storagePercent = Math.min(100, (storageUsedBytes / album.storage_limit_bytes) * 100);
   const uploadAvailable = canUpload && windows.uploadOpen;
   const showInlineCta = mediaTotal === 0 && uploadAvailable && !modalOpen;
+  const brandConfig = BRANDS[album.brand] ?? BRANDS.vivido;
 
   return (
-    <main className={`mx-auto min-h-screen max-w-5xl px-4 py-8 sm:px-6 ${selectMode ? 'pb-24' : ''}`}>
+    <div className="flex min-h-screen flex-col">
+      <BrandTheme brand={album.brand} />
+      <main className={`mx-auto w-full max-w-5xl flex-1 px-4 py-8 sm:px-6 ${selectMode ? 'pb-24' : ''}`}>
       <input
         ref={cameraPhotoInputRef}
         type="file"
@@ -848,6 +854,10 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
 
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
+          {album.brand !== 'vivido' && brandConfig.logoMark && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={brandConfig.logoMark} alt={brandConfig.name} className="mb-2 h-9 w-auto" />
+          )}
           <h1 className="font-serif-title text-3xl text-brand-dark">{album.name}</h1>
           <p className="text-sm text-gray-500">
             {[formatDate(album.event_date), album.location].filter(Boolean).join(' · ') || 'Sin fecha/lugar'}
@@ -1063,7 +1073,9 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
       {nameModalOpen && (
         <NameModal initialValue={displayName ?? ''} onSave={handleSaveName} onSkip={handleSkipName} />
       )}
-    </main>
+      </main>
+      <Footer brand={album.brand} />
+    </div>
   );
 }
 

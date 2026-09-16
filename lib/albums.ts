@@ -2,6 +2,7 @@ import { getSupabaseAdmin } from './supabase';
 import { createUploadUrl, getViewUrl, createDownloadUrl, deleteObject } from './r2';
 import { generateAccessToken } from './tokens';
 import { FREE_PLAN, kindForContentType, ACCEPTED_IMAGE_TYPES } from './limits';
+import type { BrandKey } from './brands';
 
 const MAX_COVER_IMAGE_BYTES = 8 * 1024 * 1024; // 8 MB — tope razonable para una foto de portada
 
@@ -38,6 +39,11 @@ export interface AlbumRow {
   cover_position_x: number;
   cover_position_y: number;
   created_at: string;
+  brand: BrandKey;
+  // Mientras estamos en fase beta (ver comentario en schema.sql) esto viene en
+  // false por defecto: el álbum nunca se archiva/borra solo aunque pasen los
+  // retention_days, hasta que se prenda manualmente desde el panel de admin.
+  retention_enabled: boolean;
 }
 
 export interface MediaRow {
@@ -77,8 +83,13 @@ export function computeWindows(album: AlbumRow): AlbumWindows {
   const now = new Date();
   const uploadClosesAt =
     album.upload_window_days != null ? daysFromNow(album.created_at, album.upload_window_days) : null;
+  // Si retention_enabled está apagado (default en fase beta), el álbum nunca
+  // se considera vencido por antigüedad — solo un cierre manual del
+  // organizador o del admin lo archiva.
   const viewableUntilDate =
-    album.retention_days != null ? daysFromNow(album.created_at, album.retention_days) : null;
+    album.retention_enabled && album.retention_days != null
+      ? daysFromNow(album.created_at, album.retention_days)
+      : null;
 
   const closedByOrganizer = album.status !== 'active';
   const closedByWindow = uploadClosesAt != null && now > uploadClosesAt;
@@ -244,6 +255,7 @@ export interface CreateAlbumInput {
   name: string;
   eventDate?: string | null;
   location?: string | null;
+  brand?: BrandKey;
 }
 
 export interface CreateAlbumResult {
@@ -264,6 +276,7 @@ export async function createAlbum(input: CreateAlbumInput): Promise<CreateAlbumR
       video_max_seconds: FREE_PLAN.videoMaxSeconds,
       upload_window_days: FREE_PLAN.uploadWindowDays,
       retention_days: FREE_PLAN.retentionDays,
+      brand: input.brand === 'divine_tables' ? 'divine_tables' : 'vivido',
     })
     .select('id')
     .single();
@@ -613,6 +626,127 @@ export async function closeAlbum(token: string): Promise<{ ok: boolean; reason?:
   const supabase = getSupabaseAdmin();
   const { error } = await supabase.from('albums').update({ status: 'closed' }).eq('id', album.id);
   if (error) throw error;
+
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Panel de super usuario (ver app/admin/[secret]) — Lorenzo es el único admin
+// mientras estamos en fase beta. Nada de esto pasa por resolveToken: estas
+// funciones operan directamente sobre cualquier álbum por id, sin necesidad
+// de un enlace de rol. La verificación del secreto de admin se hace en la
+// capa de rutas (app/api/admin/**), no acá.
+// ---------------------------------------------------------------------------
+
+export interface AdminAlbumSummary {
+  id: string;
+  name: string;
+  event_date: string | null;
+  location: string | null;
+  brand: BrandKey;
+  status: 'active' | 'closed' | 'archived';
+  retention_enabled: boolean;
+  retention_days: number | null;
+  created_at: string;
+  organizerLink: string | null;
+  storageUsedBytes: number;
+  mediaCount: number;
+  windows: AlbumWindows;
+}
+
+/** Trae todos los álbumes con lo necesario para el panel de admin (lista completa, no paginada). */
+export async function listAllAlbums(): Promise<AdminAlbumSummary[]> {
+  const supabase = getSupabaseAdmin();
+
+  const { data: albums, error } = await supabase
+    .from('albums')
+    .select('*')
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  if (!albums || albums.length === 0) return [];
+
+  const albumIds = albums.map((a) => a.id);
+
+  const [{ data: mediaRows, error: mediaError }, { data: organizerTokens, error: tokenError }] = await Promise.all([
+    supabase.from('media').select('album_id, size_bytes, display_size_bytes').in('album_id', albumIds),
+    supabase.from('album_tokens').select('token, album_id').eq('role', 'organizer').in('album_id', albumIds),
+  ]);
+  if (mediaError) throw mediaError;
+  if (tokenError) throw tokenError;
+
+  const storageByAlbum = new Map<string, number>();
+  const countByAlbum = new Map<string, number>();
+  for (const row of mediaRows ?? []) {
+    const size = Number(row.size_bytes) + Number(row.display_size_bytes ?? 0);
+    storageByAlbum.set(row.album_id, (storageByAlbum.get(row.album_id) ?? 0) + size);
+    countByAlbum.set(row.album_id, (countByAlbum.get(row.album_id) ?? 0) + 1);
+  }
+
+  const organizerByAlbum = new Map<string, string>();
+  for (const row of organizerTokens ?? []) {
+    organizerByAlbum.set(row.album_id, row.token);
+  }
+
+  return (albums as AlbumRow[]).map((album) => ({
+    id: album.id,
+    name: album.name,
+    event_date: album.event_date,
+    location: album.location,
+    brand: album.brand,
+    status: album.status,
+    retention_enabled: album.retention_enabled,
+    retention_days: album.retention_days,
+    created_at: album.created_at,
+    organizerLink: organizerByAlbum.has(album.id) ? `/a/${organizerByAlbum.get(album.id)}` : null,
+    storageUsedBytes: storageByAlbum.get(album.id) ?? 0,
+    mediaCount: countByAlbum.get(album.id) ?? 0,
+    windows: computeWindows(album),
+  }));
+}
+
+/** Prende o apaga el auto-borrado por antigüedad para un álbum puntual. */
+export async function setAlbumRetentionEnabled(albumId: string, enabled: boolean): Promise<{ ok: boolean; reason?: string }> {
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase.from('albums').update({ retention_enabled: enabled }).eq('id', albumId);
+  if (error) throw error;
+  return { ok: true };
+}
+
+/**
+ * Borra un álbum por completo: todos sus archivos en R2 (originales, copias
+ * "display" y portada) y la fila en Supabase. Las filas dependientes
+ * (album_tokens, media, media_likes) se borran solas por el ON DELETE CASCADE
+ * definido en schema.sql — acá solo hace falta ocuparse de lo que Postgres no
+ * puede tocar: los objetos en R2.
+ */
+export async function deleteAlbumCompletely(albumId: string): Promise<{ ok: boolean; reason?: string }> {
+  const supabase = getSupabaseAdmin();
+
+  const { data: album, error: albumError } = await supabase
+    .from('albums')
+    .select('cover_image_key')
+    .eq('id', albumId)
+    .maybeSingle();
+  if (albumError) throw albumError;
+  if (!album) return { ok: false, reason: 'Álbum no encontrado.' };
+
+  const { data: mediaRows, error: mediaError } = await supabase
+    .from('media')
+    .select('r2_key, r2_key_display')
+    .eq('album_id', albumId);
+  if (mediaError) throw mediaError;
+
+  const keysToDelete = new Set<string>();
+  for (const row of mediaRows ?? []) {
+    if (row.r2_key) keysToDelete.add(row.r2_key);
+    if (row.r2_key_display) keysToDelete.add(row.r2_key_display);
+  }
+  if (album.cover_image_key) keysToDelete.add(album.cover_image_key);
+
+  await Promise.all(Array.from(keysToDelete).map((key) => deleteObject(key).catch(() => {})));
+
+  const { error: deleteError } = await supabase.from('albums').delete().eq('id', albumId);
+  if (deleteError) throw deleteError;
 
   return { ok: true };
 }
