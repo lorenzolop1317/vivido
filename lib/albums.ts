@@ -1,7 +1,7 @@
 import { getSupabaseAdmin } from './supabase';
 import { createUploadUrl, getViewUrl, createDownloadUrl, deleteObject } from './r2';
 import { generateAccessToken } from './tokens';
-import { FREE_PLAN, kindForContentType, ACCEPTED_IMAGE_TYPES } from './limits';
+import { FREE_PLAN, INFRA_FREE_TIER, kindForContentType, ACCEPTED_IMAGE_TYPES } from './limits';
 import type { BrandKey } from './brands';
 
 const MAX_COVER_IMAGE_BYTES = 8 * 1024 * 1024; // 8 MB — tope razonable para una foto de portada
@@ -172,6 +172,43 @@ export async function getStorageUsedBytes(albumId: string): Promise<number> {
   const { data, error } = await supabase.from('media').select('size_bytes, display_size_bytes').eq('album_id', albumId);
   if (error) throw error;
   return (data ?? []).reduce((sum, row) => sum + Number(row.size_bytes) + Number(row.display_size_bytes ?? 0), 0);
+}
+
+/**
+ * Suma lo que ocupan TODOS los álbumes juntos (de las dos marcas), no uno
+ * solo. Es la misma cuenta que ya se mostraba nomás como referencia en el
+ * panel de super usuario (el visor de espacio contra la capa gratis de R2) —
+ * ahora además se usa para frenar nuevas subidas antes de pasarse del tope,
+ * ver GLOBAL_STORAGE_CAP_BYTES más abajo.
+ */
+export async function getTotalStorageUsedBytes(): Promise<number> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase.from('media').select('size_bytes, display_size_bytes');
+  if (error) throw error;
+  return (data ?? []).reduce((sum, row) => sum + Number(row.size_bytes) + Number(row.display_size_bytes ?? 0), 0);
+}
+
+/**
+ * Tope duro de espacio para TODA la app (todos los álbumes, todas las
+ * marcas), no solo el de un álbum puntual. Reusa el mismo número que ya se
+ * mostraba en el panel de admin como referencia (INFRA_FREE_TIER.r2StorageBytes,
+ * la capa gratis de Cloudflare R2) — antes era solo informativo, ahora
+ * también bloquea nuevas subidas si hacen falta superarlo. Pensado para la
+ * fase beta con gente de afuera probando la app (ej. Divine Tables) sin que
+ * eso pueda generar cobro extra por espacio, mientras no haya un acuerdo
+ * comercial. Para subir el tope más adelante (plan pago, acuerdo con Divine
+ * Tables, etc.), alcanza con cambiar este único número.
+ */
+const GLOBAL_STORAGE_CAP_BYTES = INFRA_FREE_TIER.r2StorageBytes;
+const GLOBAL_STORAGE_CAP_REASON =
+  'La app llegó a su límite total de espacio disponible por ahora (capa gratis). Escribile a quien administra el álbum para ampliarlo.';
+
+async function assertWithinGlobalStorageCap(incomingBytes: number): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const totalUsed = await getTotalStorageUsedBytes();
+  if (totalUsed + incomingBytes > GLOBAL_STORAGE_CAP_BYTES) {
+    return { ok: false, reason: GLOBAL_STORAGE_CAP_REASON };
+  }
+  return { ok: true };
 }
 
 export type MediaItem = MediaRow & {
@@ -397,10 +434,17 @@ export async function requestUploadUrl(
   }
 
   const hasDisplayVersion = kind === 'photo' && !!input.displayContentType && !!input.displaySizeBytes;
+  const incomingBytes = input.sizeBytes + (hasDisplayVersion ? input.displaySizeBytes! : 0);
   const used = await getStorageUsedBytes(album.id);
-  if (used + input.sizeBytes + (hasDisplayVersion ? input.displaySizeBytes! : 0) > album.storage_limit_bytes) {
+  if (used + incomingBytes > album.storage_limit_bytes) {
     return { ok: false, reason: 'El álbum llegó a su límite de almacenamiento del plan gratis.' };
   }
+
+  // Tope global además del tope por álbum: aunque este álbum puntual tenga
+  // lugar de sobra, no se deja subir si eso hace que TODOS los álbumes
+  // juntos superen la capa gratis de R2 (ver GLOBAL_STORAGE_CAP_BYTES).
+  const globalCheck = await assertWithinGlobalStorageCap(incomingBytes);
+  if (!globalCheck.ok) return globalCheck;
 
   const supabase = getSupabaseAdmin();
   const { data: mediaRow, error } = await supabase
@@ -495,6 +539,8 @@ export async function requestCoverUploadUrl(
   if (input.sizeBytes > MAX_COVER_IMAGE_BYTES) {
     return { ok: false, reason: 'La imagen de portada no puede pesar más de 8 MB.' };
   }
+  const globalCheck = await assertWithinGlobalStorageCap(input.sizeBytes);
+  if (!globalCheck.ok) return globalCheck;
 
   const extension = input.contentType.split('/')[1] ?? 'jpg';
   // Sufijo único (no reusa el nombre anterior) para poder mostrar la portada

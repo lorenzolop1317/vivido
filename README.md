@@ -174,15 +174,24 @@ Desde el panel podés:
 - Ver todos los álbumes (de las dos marcas), cuánto espacio ocupa cada uno y cuándo se creó.
 - Ver de un vistazo el espacio total usado contra el límite de la capa gratis de Cloudflare R2
   (10 GB) — es una estimación sumando lo que reportan los álbumes, no una consulta en vivo a la
-  facturación de Cloudflare.
+  facturación de Cloudflare, pero es el mismo número que la app usa para frenar subidas (ver
+  siguiente punto).
+- **Tope global de 10 GB, aplicado automáticamente**: además del tope por álbum, hay un tope
+  para toda la app junta (todos los álbumes, de cualquier marca) — si una subida haría que la
+  suma de todo pase la capa gratis de R2, se rechaza sola, aunque ese álbum puntual todavía
+  tenga lugar de sobra. Pensado para cuando alguien de afuera (ej. tu prima con Divine Tables)
+  esté probando la app sin que eso pueda generar cobro extra de espacio mientras no haya un
+  acuerdo. El número vive en un solo lugar (`INFRA_FREE_TIER.r2StorageBytes` en `lib/limits.ts`)
+  — para subirlo el día que haga falta (plan pago, acuerdo comercial, etc.) alcanza con cambiar
+  ese valor, no hay que tocar nada más.
 - Crear un álbum nuevo de cualquiera de las dos marcas (botones directos a `/vivido` y
   `/divine-tables`).
 - Subir (o bajar) el tope de almacenamiento de un álbum puntual — un campo numérico en cada
   tarjeta (con selector GB/MB) donde escribís directamente el número que quieras (3, 4, 5... o
-  un valor puntual en MB si hace falta más precisión), entre 512 MB y 20 GB. Es manual álbum
-  por álbum a propósito: como no hay eventos simultáneos en esta fase beta, subirle el límite a
-  uno no compromete a los demás — solo hay que vigilar el total contra la capa gratis de R2 (el
-  visor de espacio de arriba). El valor se aplica al perder el foco del campo (o con Enter).
+  un valor puntual en MB si hace falta más precisión), entre 512 MB y 20 GB. Sigue siendo manual
+  álbum por álbum (para darle más lugar a uno puntual si hace falta), pero ahora el tope global
+  de arriba es la red de seguridad que evita pasarse de la capa gratis de R2 aunque te olvides de
+  vigilarlo vos mismo. El valor se aplica al perder el foco del campo (o con Enter).
 - Descargar directamente todas las fotos/videos que subieron los invitados de un álbum
   puntual (botón "Download Data" en cada tarjeta) — arma un .zip con los archivos originales,
   igual que el botón de descarga que ya tiene el organizador dentro de su propio álbum.

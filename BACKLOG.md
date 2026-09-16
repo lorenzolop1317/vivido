@@ -41,8 +41,27 @@ notas sueltas para más adelante:
 - **Panel de admin — mejoras posibles**: hoy es una sola pantalla con lista +
   toggles + borrado (`app/page.tsx`, `lib/albums.ts`). Si hace falta más
   adelante: paginación (si hay muchos álbumes), edición de nombre/fecha desde
-  el panel, un botón de "archivar ahora" manual sin esperar la retención, o
-  una alarma cuando el total se acerca al límite de la capa gratis de R2.
+  el panel, o un botón de "archivar ahora" manual sin esperar la retención.
+  (La alarma/freno automático cuando el total se acerca al límite de la capa
+  gratis de R2 ya está — ver el punto siguiente.)
+- ~~**Tope global de espacio (toda la app, no solo por álbum)**~~ —
+  implementado (`lib/albums.ts`: `getTotalStorageUsedBytes`,
+  `assertWithinGlobalStorageCap`, usado en `requestUploadUrl` y
+  `requestCoverUploadUrl`): antes el tope de 10 GB (`INFRA_FREE_TIER.r2StorageBytes`
+  en `lib/limits.ts`) era solo un visor informativo en el panel de admin, sin
+  nada que impidiera de verdad pasarse. Ahora cualquier subida (foto, video o
+  portada, de cualquier álbum, de cualquier marca) se rechaza automáticamente
+  si haría que la suma de TODOS los álbumes juntos supere ese número, aunque
+  el álbum puntual donde se está subiendo todavía tenga lugar de sobra según
+  su propio tope individual. Pedido explícitamente para la fase en la que tu
+  prima (Divine Tables) empieza a probar la app por su cuenta, para que no
+  pueda generar cobro extra de almacenamiento sin querer mientras no haya un
+  acuerdo comercial cerrado con ella. El número (10 GB) vive en un solo
+  lugar y ya se usaba antes para el visor del panel, así que subirlo el día
+  de mañana (plan pago, acuerdo con Divine Tables, etc.) es cambiar un solo
+  valor. No cubre las imágenes de portada existentes que ya se hayan subido
+  antes de este cambio (no se recalculan retroactivamente, solo se frena lo
+  nuevo) — no hacía falta para el pedido, pero queda anotado por las dudas.
 - **Videos**: la copia liviana para la galería hoy es solo para fotos. Si el
   peso de los videos en el feed se vuelve un problema, se podría generar un
   thumbnail/preview corto del video (no el archivo completo) para la

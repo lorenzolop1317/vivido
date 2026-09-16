@@ -215,8 +215,10 @@ export default function AdminDashboard({ initialAlbums }: { initialAlbums: Admin
             />
           </div>
           <p className="mt-2 text-xs text-gray-400">
-            Estimado a partir de lo que suman todos los álbumes (fotos/videos originales + copias livianas). Es una
-            referencia, no una consulta en vivo a la facturación de Cloudflare.
+            Estimado a partir de lo que suman todos los álbumes (fotos/videos originales + copias livianas) — no es
+            una consulta en vivo a la facturación de Cloudflare, pero sí es el mismo número que usa la app para
+            frenar nuevas subidas: si dejarían pasar estos {formatBytes(INFRA_FREE_TIER.r2StorageBytes)}, se
+            rechazan automáticamente (en cualquier álbum, de cualquier marca) hasta que liberes espacio.
           </p>
         </div>
 
