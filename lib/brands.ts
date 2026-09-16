@@ -49,7 +49,7 @@ export const BRANDS: Record<BrandKey, BrandConfig> = {
     logoMark: null,
     contactEmail: 'hola@vivido.app',
     instagram: 'vivido.app',
-    createPath: '/',
+    createPath: '/vivido',
   },
   divine_tables: {
     key: 'divine_tables',

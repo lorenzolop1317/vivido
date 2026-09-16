@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isValidAdminSecret } from '@/lib/admin-auth';
+import { ADMIN_COOKIE_NAME, isValidAdminSession } from '@/lib/admin-auth';
 import { listAllAlbums } from '@/lib/albums';
 
 /** Refresca la lista completa de álbumes para el panel de admin. */
 export async function GET(request: NextRequest) {
-  const secret = request.nextUrl.searchParams.get('secret');
+  const session = request.cookies.get(ADMIN_COOKIE_NAME)?.value;
 
-  if (!isValidAdminSecret(secret)) {
+  if (!isValidAdminSession(session)) {
     return NextResponse.json({ error: 'No autorizado.' }, { status: 401 });
   }
 

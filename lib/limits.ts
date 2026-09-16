@@ -16,6 +16,16 @@ export const PRO_PLAN = {
   retentionDays: null, // indefinida mientras la suscripción esté activa
 } as const;
 
+// Techos de las capas gratis de la infraestructura (no son un límite "por
+// álbum" como los de arriba, sino del proyecto entero) — se usan solo para el
+// visor de espacio del panel de super usuario (ver app/page.tsx y
+// components/AdminDashboard.tsx). Son los números publicados por cada
+// proveedor al momento de escribir esto; si sus planes gratis cambian, hay
+// que actualizarlos acá.
+export const INFRA_FREE_TIER = {
+  r2StorageBytes: 10 * 1024 * 1024 * 1024, // Cloudflare R2: 10 GB de almacenamiento gratis/mes
+} as const;
+
 export const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/heic', 'image/webp'];
 export const ACCEPTED_VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/webm'];
 

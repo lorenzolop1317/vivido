@@ -1,33 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isValidAdminSecret } from '@/lib/admin-auth';
-import { setAlbumRetentionEnabled, deleteAlbumCompletely } from '@/lib/albums';
+import { ADMIN_COOKIE_NAME, isValidAdminSession } from '@/lib/admin-auth';
+import { setAlbumRetentionEnabled, setAlbumStorageLimit, deleteAlbumCompletely } from '@/lib/albums';
 
-/** Prende/apaga el auto-borrado por antigüedad de un álbum puntual. */
+/** Prende/apaga el auto-borrado por antigüedad, o cambia el tope de almacenamiento, de un álbum puntual. */
 export async function PATCH(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const body = await request.json().catch(() => null);
+  const session = request.cookies.get(ADMIN_COOKIE_NAME)?.value;
 
-  if (!isValidAdminSecret(body?.secret)) {
+  if (!isValidAdminSession(session)) {
     return NextResponse.json({ error: 'No autorizado.' }, { status: 401 });
   }
-  if (typeof body?.retentionEnabled !== 'boolean') {
-    return NextResponse.json({ error: 'Solicitud inválida.' }, { status: 400 });
+
+  const body = await request.json().catch(() => null);
+
+  if (typeof body?.retentionEnabled === 'boolean') {
+    const result = await setAlbumRetentionEnabled(id, body.retentionEnabled);
+    if (!result.ok) return NextResponse.json({ error: result.reason }, { status: 400 });
+    return NextResponse.json({ ok: true });
   }
 
-  const result = await setAlbumRetentionEnabled(id, body.retentionEnabled);
-  if (!result.ok) {
-    return NextResponse.json({ error: result.reason }, { status: 400 });
+  if (typeof body?.storageLimitBytes === 'number') {
+    const result = await setAlbumStorageLimit(id, body.storageLimitBytes);
+    if (!result.ok) return NextResponse.json({ error: result.reason }, { status: 400 });
+    return NextResponse.json({ ok: true });
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ error: 'Solicitud inválida.' }, { status: 400 });
 }
 
 /** Borra el álbum por completo: archivos en R2 + fila en la base. No se puede deshacer. */
 export async function DELETE(request: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const secret = request.nextUrl.searchParams.get('secret');
+  const session = request.cookies.get(ADMIN_COOKIE_NAME)?.value;
 
-  if (!isValidAdminSecret(secret)) {
+  if (!isValidAdminSession(session)) {
     return NextResponse.json({ error: 'No autorizado.' }, { status: 401 });
   }
 

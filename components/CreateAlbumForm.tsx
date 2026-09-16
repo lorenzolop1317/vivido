@@ -1,29 +1,28 @@
 'use client';
 
 import { useState } from 'react';
+import dynamic from 'next/dynamic';
+import QRCode from 'qrcode';
 import type { BrandKey } from '@/lib/brands';
+import { LANDING_STRINGS, type Lang } from '@/lib/i18n';
+
+// Carga diferida: InviteEmailPanel arrastra la librería de lectura de Excel,
+// que solo hace falta si el organizador realmente sube una lista de
+// invitados. Así no infla el JS que se descarga solo para crear el álbum.
+const InviteEmailPanel = dynamic(() => import('./InviteEmailPanel'), { ssr: false });
 
 interface CreateAlbumResponse {
   albumId: string;
   links: Record<'organizer' | 'contributor' | 'viewer', string>;
 }
 
-const roleLabels: Record<keyof CreateAlbumResponse['links'], { title: string; hint: string }> = {
-  organizer: {
-    title: 'Tu enlace (organizador)',
-    hint: 'Guardalo para vos: modera, cierra y descarga el álbum. No lo compartas.',
-  },
-  contributor: {
-    title: 'Enlace para invitados',
-    hint: 'Compartilo por WhatsApp o donde quieras: cualquiera que lo abra puede subir fotos/videos.',
-  },
-  viewer: {
-    title: 'Enlace solo para ver',
-    hint: 'Para quien solo quiere mirar el álbum, sin subir nada.',
-  },
-};
-
-export default function CreateAlbumForm({ brand = 'vivido' }: { brand?: BrandKey }) {
+export default function CreateAlbumForm({ brand = 'vivido', lang = 'es' }: { brand?: BrandKey; lang?: Lang }) {
+  const t = LANDING_STRINGS[lang];
+  const roleLabels: Record<keyof CreateAlbumResponse['links'], { title: string; hint: string }> = {
+    organizer: { title: t.roleOrganizerTitle, hint: t.roleOrganizerHint },
+    contributor: { title: t.roleContributorTitle, hint: t.roleContributorHint },
+    viewer: { title: t.roleViewerTitle, hint: t.roleViewerHint },
+  };
   const [name, setName] = useState('');
   const [eventDate, setEventDate] = useState('');
   const [location, setLocation] = useState('');
@@ -31,6 +30,8 @@ export default function CreateAlbumForm({ brand = 'vivido' }: { brand?: BrandKey
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CreateAlbumResponse | null>(null);
   const [copiedRole, setCopiedRole] = useState<string | null>(null);
+  const [qrOpenRole, setQrOpenRole] = useState<string | null>(null);
+  const [qrDataUrls, setQrDataUrls] = useState<Record<string, string>>({});
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -44,10 +45,10 @@ export default function CreateAlbumForm({ brand = 'vivido' }: { brand?: BrandKey
         body: JSON.stringify({ name, eventDate: eventDate || null, location: location || null, brand }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'No se pudo crear el álbum.');
+      if (!res.ok) throw new Error(data.error ?? t.createError);
       setResult(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error inesperado.');
+      setError(err instanceof Error ? err.message : t.unexpectedError);
     } finally {
       setLoading(false);
     }
@@ -60,10 +61,23 @@ export default function CreateAlbumForm({ brand = 'vivido' }: { brand?: BrandKey
     setTimeout(() => setCopiedRole(null), 2000);
   }
 
+  async function toggleQr(role: string, path: string) {
+    if (qrOpenRole === role) {
+      setQrOpenRole(null);
+      return;
+    }
+    if (!qrDataUrls[role]) {
+      const fullUrl = `${window.location.origin}${path}`;
+      const dataUrl = await QRCode.toDataURL(fullUrl, { width: 480, margin: 1 });
+      setQrDataUrls((prev) => ({ ...prev, [role]: dataUrl }));
+    }
+    setQrOpenRole(role);
+  }
+
   if (result) {
     return (
       <div className="space-y-4">
-        <p className="text-center text-sm font-medium text-green-700">¡Álbum creado! Guardá estos enlaces.</p>
+        <p className="text-center text-sm font-medium text-green-700">{t.createdTitle}</p>
         {(Object.keys(result.links) as Array<keyof CreateAlbumResponse['links']>).map((role) => (
           <div key={role} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
             <p className="text-sm font-semibold text-brand-dark">{roleLabels[role].title}</p>
@@ -76,12 +90,35 @@ export default function CreateAlbumForm({ brand = 'vivido' }: { brand?: BrandKey
                 onClick={() => copyLink(role, result.links[role])}
                 className="rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-dark"
               >
-                {copiedRole === role ? 'Copiado' : 'Copiar'}
+                {copiedRole === role ? t.copiedButton : t.copyButton}
               </button>
+              {role === 'contributor' && (
+                <button
+                  onClick={() => toggleQr(role, result.links[role])}
+                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                >
+                  {qrOpenRole === role ? t.hideQr : t.showQr}
+                </button>
+              )}
             </div>
+            {role === 'contributor' && qrOpenRole === role && qrDataUrls[role] && (
+              <div className="mt-3 flex flex-col items-center gap-2 border-t border-gray-100 pt-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={qrDataUrls[role]} alt={roleLabels.contributor.title} className="h-40 w-40" />
+                <p className="text-center text-xs text-gray-500">{t.qrHint}</p>
+                <a
+                  href={qrDataUrls[role]}
+                  download={`qr-invitados-${name || 'album'}.png`}
+                  className="text-xs font-medium text-brand underline hover:text-brand-dark"
+                >
+                  {t.downloadQr}
+                </a>
+              </div>
+            )}
           </div>
         ))}
-        <p className="pt-2 text-center text-xs text-gray-400">Plan gratis: 3 GB por álbum, videos hasta 60s, 14 días para subir.</p>
+        <InviteEmailPanel organizerToken={result.links.organizer.replace('/a/', '')} albumName={name} brand={brand} lang={lang} />
+        <p className="pt-2 text-center text-xs text-gray-400">{t.planInfo}</p>
       </div>
     );
   }
@@ -89,17 +126,17 @@ export default function CreateAlbumForm({ brand = 'vivido' }: { brand?: BrandKey
   return (
     <form onSubmit={handleSubmit} className="space-y-4 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
       <div>
-        <label className="block text-sm font-medium text-gray-700">Nombre del evento</label>
+        <label className="block text-sm font-medium text-gray-700">{t.eventNameLabel}</label>
         <input
           required
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Cumple de Sofía"
+          placeholder={brand === 'divine_tables' ? t.eventNamePlaceholder : 'Cumple de Sofía'}
           className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none"
         />
       </div>
       <div>
-        <label className="block text-sm font-medium text-gray-700">Fecha (opcional)</label>
+        <label className="block text-sm font-medium text-gray-700">{t.eventDateLabel}</label>
         <input
           type="date"
           value={eventDate}
@@ -108,11 +145,11 @@ export default function CreateAlbumForm({ brand = 'vivido' }: { brand?: BrandKey
         />
       </div>
       <div>
-        <label className="block text-sm font-medium text-gray-700">Lugar (opcional)</label>
+        <label className="block text-sm font-medium text-gray-700">{t.eventLocationLabel}</label>
         <input
           value={location}
           onChange={(e) => setLocation(e.target.value)}
-          placeholder="Salón Los Álamos"
+          placeholder={brand === 'divine_tables' ? t.eventLocationPlaceholder : 'Salón Los Álamos'}
           className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand focus:outline-none"
         />
       </div>
@@ -122,7 +159,7 @@ export default function CreateAlbumForm({ brand = 'vivido' }: { brand?: BrandKey
         disabled={loading}
         className="w-full rounded-lg bg-brand py-2.5 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-50"
       >
-        {loading ? 'Creando…' : 'Crear álbum'}
+        {loading ? t.creatingButton : t.createButton}
       </button>
     </form>
   );

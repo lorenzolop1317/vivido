@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AlbumViewModel, MediaItem } from '@/lib/albums';
 import { BRANDS } from '@/lib/brands';
+import { WORKSPACE_STRINGS, formatDateForLang, getStoredLang, setStoredLang, type Lang } from '@/lib/i18n';
 import BrandTheme from './BrandTheme';
 import Footer from './Footer';
+import LanguageToggle from './LanguageToggle';
 
 const DEVICE_ID_KEY = 'event-album:device-id';
 const DISPLAY_NAME_KEY = 'event-album:display-name';
@@ -33,10 +35,6 @@ function formatBytes(bytes: number) {
   return `${value.toFixed(1)} ${units[unitIndex]}`;
 }
 
-function formatDate(iso: string | null) {
-  if (!iso) return null;
-  return new Date(iso).toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' });
-}
 
 function readImageDimensions(file: File): Promise<{ width: number; height: number }> {
   return new Promise((resolve, reject) => {
@@ -262,6 +260,11 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
   const [coverUploading, setCoverUploading] = useState(false);
   const [coverError, setCoverError] = useState<string | null>(null);
   const [coverEditorOpen, setCoverEditorOpen] = useState(false);
+  // Idioma: solo relevante para álbumes de Divine Tables (Vívido siempre
+  // queda en español). Arranca en 'es' para que coincida con el render del
+  // servidor, y adopta la preferencia guardada apenas monta en el navegador
+  // (ver el useEffect de más abajo, una vez que sabemos la marca del álbum).
+  const [lang, setLang] = useState<Lang>('es');
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const cameraPhotoInputRef = useRef<HTMLInputElement>(null);
   const cameraVideoInputRef = useRef<HTMLInputElement>(null);
@@ -317,6 +320,20 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Idioma guardado (solo importa para Divine Tables — ver comentario donde
+  // se declara el estado `lang` más arriba).
+  useEffect(() => {
+    if (initialView.album.brand === 'divine_tables') {
+      setLang(getStoredLang());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function handleChangeLang(next: Lang) {
+    setLang(next);
+    setStoredLang(next);
+  }
 
   const loadMore = useCallback(async () => {
     if (loadingMore || !hasMore) return;
@@ -618,12 +635,12 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
   }
 
   async function handleRemoveCover() {
-    if (!confirm('¿Quitar la imagen de portada del álbum?')) return;
+    if (!confirm(t.removeCoverConfirm)) return;
     const res = await fetch(`/api/albums/${token}/cover`, { method: 'DELETE' });
     if (res.ok) {
       setMeta((prev) => ({ ...prev, coverImageUrl: null, album: { ...prev.album, cover_position_x: 50, cover_position_y: 50 } }));
     } else {
-      alert('No se pudo quitar la portada.');
+      alert(t.couldNotRemoveCover);
     }
   }
 
@@ -635,7 +652,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'position', x, y }),
     });
-    if (!res.ok) alert('No se pudo guardar el encuadre de la portada.');
+    if (!res.ok) alert(t.couldNotSaveCoverPosition);
   }
 
   function handleSaveName(name: string) {
@@ -656,7 +673,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
     const res = await fetch(`/api/media/${mediaId}?token=${token}&deviceId=${deviceId}`, { method: 'DELETE' });
     const data = await res.json();
     if (!res.ok) {
-      alert(data.error ?? 'No se pudo borrar.');
+      alert(data.error ?? t.genericDeleteError);
       return;
     }
     setLightboxIndex(null);
@@ -691,7 +708,15 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
 
   async function handleBulkDelete() {
     if (selectedIds.size === 0) return;
-    if (!confirm(`¿Borrar ${selectedIds.size} ${selectedIds.size === 1 ? 'foto/video' : 'fotos/videos'}?`)) return;
+    if (
+      !confirm(
+        t.deleteSelectedConfirm(
+          selectedIds.size,
+          selectedIds.size === 1 ? t.photoOrVideoSingular : t.photosOrVideosPlural
+        )
+      )
+    )
+      return;
 
     setBulkDeleting(true);
     const ids = Array.from(selectedIds);
@@ -716,12 +741,12 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
     setSelectMode(false);
 
     if (failedCount > 0) {
-      alert(`${failedCount} ${failedCount === 1 ? 'no se pudo borrar' : 'no se pudieron borrar'}.`);
+      alert(`${failedCount} ${failedCount === 1 ? t.deleteFailedSingular : t.deleteFailedPlural}`);
     }
   }
 
   async function handleClose() {
-    if (!confirm('¿Cerrar el álbum? No se van a poder subir más fotos ni videos.')) return;
+    if (!confirm(t.closeAlbumConfirm)) return;
     const res = await fetch(`/api/albums/${token}/close`, { method: 'POST' });
     if (res.ok) {
       const data = await fetchPage(0, mediaItems.length || PAGE_SIZE);
@@ -755,6 +780,8 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
   const uploadAvailable = canUpload && windows.uploadOpen;
   const showInlineCta = mediaTotal === 0 && uploadAvailable && !modalOpen;
   const brandConfig = BRANDS[album.brand] ?? BRANDS.vivido;
+  const t = WORKSPACE_STRINGS[lang];
+  const fmtDate = (iso: string | null) => formatDateForLang(iso, lang);
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -807,7 +834,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
             />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center border-2 border-dashed border-gray-300 bg-white/50 text-sm text-gray-400">
-              Sin portada todavía
+              {t.noCoverYet}
             </div>
           )}
           {canModerate && (
@@ -817,7 +844,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
                   onClick={() => setCoverEditorOpen(true)}
                   className="flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm transition hover:bg-black/75"
                 >
-                  Reposicionar
+                  {t.reposition}
                 </button>
               )}
               <button
@@ -826,14 +853,14 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
                 className="flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm transition hover:bg-black/75 disabled:opacity-50"
               >
                 <ImageEditIcon className="h-3.5 w-3.5" />
-                {coverUploading ? 'Subiendo…' : coverImageUrl ? 'Cambiar portada' : 'Agregar portada'}
+                {coverUploading ? t.uploadingCover : coverImageUrl ? t.changeCover : t.addCover}
               </button>
               {coverImageUrl && (
                 <button
                   onClick={handleRemoveCover}
                   className="rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm transition hover:bg-black/75"
                 >
-                  Quitar
+                  {t.removeCover}
                 </button>
               )}
             </div>
@@ -847,6 +874,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
           imageUrl={coverImageUrl}
           initialX={album.cover_position_x}
           initialY={album.cover_position_y}
+          lang={lang}
           onCancel={() => setCoverEditorOpen(false)}
           onSave={handleSaveCoverPosition}
         />
@@ -856,55 +884,67 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
         <div>
           {album.brand !== 'vivido' && brandConfig.logoMark && (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={brandConfig.logoMark} alt={brandConfig.name} className="mb-2 h-9 w-auto" />
+            <img src={brandConfig.logoMark} alt={brandConfig.name} className="mb-2 h-16 w-auto sm:h-20" />
           )}
           <h1 className="font-serif-title text-3xl text-brand-dark">{album.name}</h1>
           <p className="text-sm text-gray-500">
-            {[formatDate(album.event_date), album.location].filter(Boolean).join(' · ') || 'Sin fecha/lugar'}
+            {[fmtDate(album.event_date), album.location].filter(Boolean).join(' · ') || t.noDateOrLocation}
           </p>
           <p className="mt-1 text-xs uppercase tracking-wide text-gray-400">
-            Tu rol: {role === 'organizer' ? 'Organizador' : role === 'moderator' ? 'Moderador' : role === 'contributor' ? 'Invitado (podés subir)' : 'Solo ver'}
+            {t.yourRole}:{' '}
+            {role === 'organizer'
+              ? t.roleOrganizer
+              : role === 'moderator'
+                ? t.roleModerator
+                : role === 'contributor'
+                  ? t.roleContributor
+                  : t.roleViewer}
           </p>
           {uploadAvailable && (
             <p className="mt-1 text-xs text-gray-400">
               {displayName ? (
                 <>
-                  Participás como <span className="font-semibold text-gray-600">{displayName}</span>
+                  {t.participatingAs} <span className="font-semibold text-gray-600">{displayName}</span>
                   {' · '}
                   <button onClick={() => setNameModalOpen(true)} className="underline hover:text-brand">
-                    cambiar
+                    {t.changeName}
                   </button>
                 </>
               ) : (
                 <button onClick={() => setNameModalOpen(true)} className="underline hover:text-brand">
-                  Identificate para que tus fotos lleven tu nombre
+                  {t.identifyYourself}
                 </button>
               )}
             </p>
           )}
         </div>
 
-        {mediaTotal > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {canModerate && (
-              <button
-                onClick={toggleSelectMode}
-                className="rounded-full border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-600 shadow-sm transition hover:bg-gray-50"
-              >
-                {selectMode ? 'Cancelar selección' : 'Seleccionar'}
-              </button>
-            )}
-            {uploadAvailable && (
-              <button
-                onClick={() => {
-                  setModalOpen(true);
-                  setUploadStage('idle');
-                }}
-                className="flex items-center gap-2 rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-dark hover:shadow-md"
-              >
-                <ImagesIcon className="h-4 w-4" />
-                Cargar más fotos
-              </button>
+        {(album.brand === 'divine_tables' || mediaTotal > 0) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {album.brand === 'divine_tables' && <LanguageToggle lang={lang} onChange={handleChangeLang} />}
+            {mediaTotal > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {canModerate && (
+                  <button
+                    onClick={toggleSelectMode}
+                    className="rounded-full border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-600 shadow-sm transition hover:bg-gray-50"
+                  >
+                    {selectMode ? t.cancelSelection : t.selectMode}
+                  </button>
+                )}
+                {uploadAvailable && (
+                  <button
+                    onClick={() => {
+                      setModalOpen(true);
+                      setUploadStage('idle');
+                    }}
+                    className="flex items-center gap-2 rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-dark hover:shadow-md"
+                  >
+                    <ImagesIcon className="h-4 w-4" />
+                    {t.loadMorePhotos}
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -913,37 +953,38 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
       {brokenIds.size > 0 && canModerate && (
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-amber-50 p-4 text-sm text-amber-800">
           <span>
-            {brokenIds.size} {brokenIds.size === 1 ? 'archivo no se pudo cargar' : 'archivos no se pudieron cargar'} (se perdieron al
-            subirlos).
+            {brokenIds.size} {brokenIds.size === 1 ? t.brokenFilesWarningSingular : t.brokenFilesWarningPlural}
+            {t.brokenFilesWarningSuffix && ` ${t.brokenFilesWarningSuffix}`}
           </span>
           <button
             onClick={selectAllBroken}
             className="shrink-0 rounded-full bg-amber-600 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-700"
           >
-            Seleccionar {brokenIds.size === 1 ? 'ese archivo' : 'todos'}
+            {brokenIds.size === 1 ? t.selectThatFile : t.selectAll}
           </button>
         </div>
       )}
 
       {windows.isArchived ? (
         <div className="mb-6 rounded-lg bg-amber-50 p-4 text-sm text-amber-800">
-          Este álbum ya se archivó (pasó su ventana de retención de {album.retention_days} días) y su contenido
-          ya no está disponible.
+          {t.archivedNotice(album.retention_days ?? 0)}
         </div>
       ) : (
         <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4">
           <div className="flex items-center justify-between text-xs text-gray-500">
-            <span>{formatBytes(storageUsedBytes)} usados</span>
-            <span>{formatBytes(album.storage_limit_bytes)} límite (plan gratis)</span>
+            <span>
+              {formatBytes(storageUsedBytes)} {t.usedLabel}
+            </span>
+            <span>
+              {formatBytes(album.storage_limit_bytes)} {t.limitLabel}
+            </span>
           </div>
           <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-gray-100">
             <div className="h-full bg-brand" style={{ width: `${storagePercent}%` }} />
           </div>
           <p className="mt-2 text-xs text-gray-500">
-            {windows.uploadOpen
-              ? `Se puede seguir subiendo hasta el ${formatDate(windows.uploadClosesAt)}.`
-              : 'La ventana para subir contenido ya cerró.'}
-            {windows.viewableUntil && ` El álbum se archiva el ${formatDate(windows.viewableUntil)}.`}
+            {windows.uploadOpen ? t.uploadOpenUntil(fmtDate(windows.uploadClosesAt) ?? '') : t.uploadClosed}
+            {windows.viewableUntil && ` ${t.archivesOn(fmtDate(windows.viewableUntil) ?? '')}`}
           </p>
         </div>
       )}
@@ -954,14 +995,14 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
             href={`/api/albums/${token}/export`}
             className="flex-1 rounded-lg border border-gray-300 py-2 text-center text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
-            Descargar todo (.zip)
+            {t.downloadAll}
           </a>
           {album.status === 'active' && (
             <button
               onClick={handleClose}
               className="flex-1 rounded-lg border border-red-200 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
             >
-              Cerrar álbum
+              {t.closeAlbum}
             </button>
           )}
         </div>
@@ -969,20 +1010,18 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
 
       {showInlineCta && (
         <div className="mb-8 rounded-2xl border border-dashed border-brand/30 bg-white/70 px-6 py-10 text-center">
-          <p className="font-serif-title text-2xl text-brand-dark">Todavía no hay fotos ni videos</p>
-          <p className="mx-auto mt-1 max-w-sm text-sm text-gray-500">
-            Sé el/la primero/a en sumar un recuerdo de este evento. Cualquiera con este enlace puede subir.
-          </p>
+          <p className="font-serif-title text-2xl text-brand-dark">{t.emptyTitle}</p>
+          <p className="mx-auto mt-1 max-w-sm text-sm text-gray-500">{t.emptySubtitle}</p>
           <div className="mx-auto mt-6 grid max-w-sm grid-cols-2 gap-3">
-            <CameraEntryButton onPhoto={triggerCameraPhoto} onVideo={triggerCameraVideo} />
-            <UploadEntryButton variant="secondary" icon={<ImagesIcon className="h-7 w-7" />} label="Elegir de la galería" onClick={triggerGallery} />
+            <CameraEntryButton onPhoto={triggerCameraPhoto} onVideo={triggerCameraVideo} label={t.takePhotoOrVideo} photoLabel={t.photo} videoLabel={t.video} />
+            <UploadEntryButton variant="secondary" icon={<ImagesIcon className="h-7 w-7" />} label={t.chooseFromGallery} onClick={triggerGallery} />
           </div>
         </div>
       )}
 
       {mediaTotal > 0 && (
         <p className="mb-3 text-xs uppercase tracking-wide text-gray-400">
-          {mediaTotal} {mediaTotal === 1 ? 'momento' : 'momentos'} · tocá una foto para verla en grande
+          {mediaTotal} {mediaTotal === 1 ? t.mediaCountSingular : t.mediaCountPlural}
         </p>
       )}
 
@@ -996,11 +1035,12 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
               canDelete={canDelete}
               selectMode={selectMode}
               selected={selectedIds.has(item.id)}
+              lang={lang}
               onOpen={() => setLightboxIndex(index)}
               onToggleSelect={() => toggleSelected(item.id)}
               onToggleLike={() => handleToggleLike(item.id)}
               onDelete={() => {
-                if (confirm('¿Borrar esta foto/video?')) handleDelete(item.id);
+                if (confirm(t.deleteMediaConfirm)) handleDelete(item.id);
               }}
               onBroken={() => setBrokenIds((prev) => new Set(prev).add(item.id))}
             />
@@ -1011,21 +1051,21 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
       {selectMode && (
         <div className="fixed inset-x-0 bottom-0 z-40 flex items-center justify-between gap-3 border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-4px_20px_rgba(0,0,0,0.1)] sm:px-6">
           <span className="text-sm font-medium text-gray-600">
-            {selectedIds.size} {selectedIds.size === 1 ? 'seleccionada' : 'seleccionadas'}
+            {selectedIds.size} {selectedIds.size === 1 ? t.selectedSingular : t.selectedPlural}
           </span>
           <div className="flex gap-2">
             <button
               onClick={toggleSelectMode}
               className="rounded-full border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
             >
-              Cancelar
+              {t.cancel}
             </button>
             <button
               onClick={handleBulkDelete}
               disabled={selectedIds.size === 0 || bulkDeleting}
               className="rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-40"
             >
-              {bulkDeleting ? 'Borrando…' : `Borrar${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}`}
+              {bulkDeleting ? t.deleting : `${t.deleteSelected}${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}`}
             </button>
           </div>
         </div>
@@ -1038,13 +1078,14 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
       )}
 
       {mediaTotal === 0 && !windows.isArchived && !uploadAvailable && (
-        <p className="mt-8 text-center text-sm text-gray-400">Todavía no hay fotos ni videos en este álbum.</p>
+        <p className="mt-8 text-center text-sm text-gray-400">{t.noMediaYet}</p>
       )}
 
       {lightboxIndex !== null && (
         <Lightbox
           media={mediaItems}
           index={lightboxIndex}
+          lang={lang}
           onClose={() => setLightboxIndex(null)}
           onNavigate={setLightboxIndex}
           onToggleLike={handleToggleLike}
@@ -1061,6 +1102,7 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
           doneCount={doneCount}
           failedCount={failedItems.length}
           summary={uploadSummary}
+          lang={lang}
           onTriggerCameraPhoto={triggerCameraPhoto}
           onTriggerCameraVideo={triggerCameraVideo}
           onTriggerGallery={triggerGallery}
@@ -1071,10 +1113,10 @@ export default function AlbumWorkspace({ token, initialView }: { token: string; 
       )}
 
       {nameModalOpen && (
-        <NameModal initialValue={displayName ?? ''} onSave={handleSaveName} onSkip={handleSkipName} />
+        <NameModal initialValue={displayName ?? ''} lang={lang} onSave={handleSaveName} onSkip={handleSkipName} />
       )}
       </main>
-      <Footer brand={album.brand} />
+      <Footer brand={album.brand} lang={lang} />
     </div>
   );
 }
@@ -1086,6 +1128,7 @@ function Thumbnail({
   canDelete,
   selectMode,
   selected,
+  lang = 'es',
   onOpen,
   onToggleSelect,
   onToggleLike,
@@ -1096,12 +1139,14 @@ function Thumbnail({
   canDelete: boolean;
   selectMode: boolean;
   selected: boolean;
+  lang?: Lang;
   onOpen: () => void;
   onToggleSelect: () => void;
   onToggleLike: () => void;
   onDelete: () => void;
   onBroken: () => void;
 }) {
+  const t = WORKSPACE_STRINGS[lang];
   const [loaded, setLoaded] = useState(false);
   const [broken, setBroken] = useState(false);
   const ratio = item.width && item.height ? `${item.width} / ${item.height}` : '4 / 3';
@@ -1136,7 +1181,7 @@ function Thumbnail({
       {broken ? (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-gray-100 text-gray-400">
           <BrokenImageIcon className="h-6 w-6" />
-          <span className="text-[10px] font-medium uppercase tracking-wide">No se pudo cargar</span>
+          <span className="text-[10px] font-medium uppercase tracking-wide">{t.couldNotLoad}</span>
         </div>
       ) : item.kind === 'photo' ? (
         // eslint-disable-next-line @next/next/no-img-element
@@ -1210,7 +1255,7 @@ function Thumbnail({
               }}
               className="absolute right-2 top-2 rounded-full bg-black/60 px-2.5 py-1 text-xs text-white opacity-0 pointer-events-none transition group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
             >
-              Borrar
+              {t.delete}
             </button>
           )}
 
@@ -1263,7 +1308,19 @@ function UploadEntryButton({
  * imagen, otro solo video), cada uno con su propio capture="environment", el
  * navegador sí abre la cámara correspondiente de forma directa.
  */
-function CameraEntryButton({ onPhoto, onVideo }: { onPhoto: () => void; onVideo: () => void }) {
+function CameraEntryButton({
+  onPhoto,
+  onVideo,
+  label = 'Sacar foto o video',
+  photoLabel = 'Foto',
+  videoLabel = 'Video',
+}: {
+  onPhoto: () => void;
+  onVideo: () => void;
+  label?: string;
+  photoLabel?: string;
+  videoLabel?: string;
+}) {
   const [open, setOpen] = useState(false);
 
   if (!open) {
@@ -1271,7 +1328,7 @@ function CameraEntryButton({ onPhoto, onVideo }: { onPhoto: () => void; onVideo:
       <UploadEntryButton
         variant="primary"
         icon={<CameraIcon className="h-7 w-7" />}
-        label="Sacar foto o video"
+        label={label}
         onClick={() => setOpen(true)}
       />
     );
@@ -1284,14 +1341,14 @@ function CameraEntryButton({ onPhoto, onVideo }: { onPhoto: () => void; onVideo:
         className="flex items-center justify-center gap-2 rounded-xl bg-white/15 py-3 text-sm font-semibold text-white transition hover:bg-white/25"
       >
         <CameraIcon className="h-5 w-5" />
-        Foto
+        {photoLabel}
       </button>
       <button
         onClick={onVideo}
         className="flex items-center justify-center gap-2 rounded-xl bg-white/15 py-3 text-sm font-semibold text-white transition hover:bg-white/25"
       >
         <VideoIcon className="h-5 w-5" />
-        Video
+        {videoLabel}
       </button>
     </div>
   );
@@ -1305,6 +1362,7 @@ function UploadModal({
   doneCount,
   failedCount,
   summary,
+  lang = 'es',
   onTriggerCameraPhoto,
   onTriggerCameraVideo,
   onTriggerGallery,
@@ -1317,6 +1375,7 @@ function UploadModal({
   doneCount: number;
   failedCount: number;
   summary: UploadSummary | null;
+  lang?: Lang;
   onTriggerCameraPhoto: () => void;
   onTriggerCameraVideo: () => void;
   onTriggerGallery: () => void;
@@ -1324,6 +1383,7 @@ function UploadModal({
   onContinueWithErrors: () => void;
   onClose: () => void;
 }) {
+  const t = WORKSPACE_STRINGS[lang];
   const canClose = stage !== 'uploading';
   const total = uploads.length;
   const progressPercent = total > 0 ? Math.round((doneCount / total) * 100) : 0;
@@ -1336,13 +1396,13 @@ function UploadModal({
       <div className="w-full max-w-sm rounded-2xl bg-paper p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="font-serif-title text-xl text-brand-dark">
-            {stage === 'idle' && 'Sumar al álbum'}
-            {stage === 'uploading' && 'Subiendo…'}
-            {stage === 'retry' && 'Casi listo'}
-            {stage === 'summary' && '¡Listo!'}
+            {stage === 'idle' && t.uploadStartTitle}
+            {stage === 'uploading' && t.uploadingTitle}
+            {stage === 'retry' && t.uploadRetryTitle}
+            {stage === 'summary' && t.uploadSummaryTitle}
           </h2>
           {canClose && (
-            <button onClick={onClose} aria-label="Cerrar" className="rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+            <button onClick={onClose} aria-label={t.close} className="rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
               <XIcon className="h-5 w-5" />
             </button>
           )}
@@ -1350,8 +1410,8 @@ function UploadModal({
 
         {stage === 'idle' && (
           <div className="grid grid-cols-2 gap-3">
-            <CameraEntryButton onPhoto={onTriggerCameraPhoto} onVideo={onTriggerCameraVideo} />
-            <UploadEntryButton variant="secondary" icon={<ImagesIcon className="h-7 w-7" />} label="Elegir de la galería" onClick={onTriggerGallery} />
+            <CameraEntryButton onPhoto={onTriggerCameraPhoto} onVideo={onTriggerCameraVideo} label={t.takePhotoOrVideo} photoLabel={t.photo} videoLabel={t.video} />
+            <UploadEntryButton variant="secondary" icon={<ImagesIcon className="h-7 w-7" />} label={t.chooseFromGallery} onClick={onTriggerGallery} />
           </div>
         )}
 
@@ -1360,7 +1420,7 @@ function UploadModal({
             <div className="mb-3">
               <div className="flex items-baseline justify-between">
                 <span className="text-sm font-semibold text-brand-dark">
-                  {doneCount} de {total}
+                  {doneCount} {t.of} {total}
                 </span>
                 <span className="text-xs text-gray-500">{progressPercent}%</span>
               </div>
@@ -1386,11 +1446,9 @@ function UploadModal({
 
         {stage === 'retry' && (
           <div>
-            <p className="text-sm text-gray-600">
-              Se subieron {doneCount - failedCount} de {total} correctamente.
-            </p>
+            <p className="text-sm text-gray-600">{t.uploadedOfTotal(doneCount - failedCount, total)}</p>
             <p className="mt-1 text-sm text-red-600">
-              {failedCount} {failedCount === 1 ? 'archivo falló' : 'archivos fallaron'}. Podés intentarlo de nuevo antes de cerrar.
+              {failedCount} {failedCount === 1 ? t.fileFailedSingular : t.fileFailedPlural}. {t.canRetryBeforeClosing}
             </p>
             <ul className="mt-3 max-h-56 space-y-2 overflow-y-auto pr-1">
               {uploads
@@ -1410,13 +1468,13 @@ function UploadModal({
                 onClick={onContinueWithErrors}
                 className="flex-1 rounded-lg border border-gray-300 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50"
               >
-                Continuar sin esas
+                {t.continueAnyway}
               </button>
               <button
                 onClick={onRetryFailed}
                 className="flex-1 rounded-lg bg-brand py-2.5 text-sm font-semibold text-white hover:bg-brand-dark"
               >
-                Reintentar ({failedCount})
+                {t.retryWithCount(failedCount)}
               </button>
             </div>
           </div>
@@ -1427,24 +1485,24 @@ function UploadModal({
             <p className="text-sm text-gray-600">
               {summary.photos > 0 && (
                 <>
-                  {summary.photos} {summary.photos === 1 ? 'foto' : 'fotos'}
+                  {summary.photos} {summary.photos === 1 ? t.photoSingular : t.photoPlural}
                 </>
               )}
-              {summary.photos > 0 && summary.videos > 0 && ' y '}
+              {summary.photos > 0 && summary.videos > 0 && (lang === 'en' ? ' and ' : ' y ')}
               {summary.videos > 0 && (
                 <>
-                  {summary.videos} {summary.videos === 1 ? 'video' : 'videos'}
+                  {summary.videos} {summary.videos === 1 ? t.videoSingular : t.videoPlural}
                 </>
               )}
-              {summary.photos + summary.videos > 0 ? ' subidos correctamente.' : 'No se subió nada.'}
+              {summary.photos + summary.videos > 0 ? t.uploadedSuccessfully : t.nothingUploaded}
             </p>
             {summary.errors > 0 && (
               <p className="mt-1 text-sm text-red-600">
-                {summary.errors} {summary.errors === 1 ? 'archivo falló' : 'archivos fallaron'}.
+                {summary.errors} {summary.errors === 1 ? t.fileFailedSingular : t.fileFailedPlural}.
               </p>
             )}
             <button onClick={onClose} className="mt-5 w-full rounded-lg bg-brand py-2.5 text-sm font-semibold text-white hover:bg-brand-dark">
-              Volver al álbum
+              {t.backToAlbum}
             </button>
           </div>
         )}
@@ -1459,15 +1517,18 @@ function CoverPositionEditor({
   imageUrl,
   initialX,
   initialY,
+  lang = 'es',
   onCancel,
   onSave,
 }: {
   imageUrl: string;
   initialX: number;
   initialY: number;
+  lang?: Lang;
   onCancel: () => void;
   onSave: (x: number, y: number) => void;
 }) {
+  const t = WORKSPACE_STRINGS[lang];
   const [pos, setPos] = useState({ x: initialX, y: initialY });
   const frameRef = useRef<HTMLDivElement>(null);
   const naturalSizeRef = useRef<{ width: number; height: number } | null>(null);
@@ -1518,8 +1579,8 @@ function CoverPositionEditor({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
       <div className="w-full max-w-lg rounded-2xl bg-paper p-5 shadow-2xl">
-        <h2 className="font-serif-title text-xl text-brand-dark">Ajustar portada</h2>
-        <p className="mt-1 text-xs text-gray-500">Arrastrá la imagen para centrarla como quieras.</p>
+        <h2 className="font-serif-title text-xl text-brand-dark">{t.adjustCoverTitle}</h2>
+        <p className="mt-1 text-xs text-gray-500">{t.adjustCoverHint}</p>
 
         <div
           ref={frameRef}
@@ -1549,13 +1610,13 @@ function CoverPositionEditor({
             onClick={onCancel}
             className="flex-1 rounded-lg border border-gray-300 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50"
           >
-            Cancelar
+            {t.cancel}
           </button>
           <button
             onClick={() => onSave(pos.x, pos.y)}
             className="flex-1 rounded-lg bg-brand py-2.5 text-sm font-semibold text-white hover:bg-brand-dark"
           >
-            Guardar
+            {t.save}
           </button>
         </div>
       </div>
@@ -1567,13 +1628,16 @@ function CoverPositionEditor({
 
 function NameModal({
   initialValue,
+  lang = 'es',
   onSave,
   onSkip,
 }: {
   initialValue: string;
+  lang?: Lang;
   onSave: (name: string) => void;
   onSkip: () => void;
 }) {
+  const t = WORKSPACE_STRINGS[lang];
   const [value, setValue] = useState(initialValue);
 
   return (
@@ -1585,15 +1649,13 @@ function NameModal({
         }}
         className="w-full max-w-sm rounded-2xl bg-paper p-6 shadow-2xl"
       >
-        <h2 className="font-serif-title text-xl text-brand-dark">¿Cómo te llamás?</h2>
-        <p className="mt-1 text-sm text-gray-500">
-          Así tus fotos y videos quedan con tu nombre — para que se sepa quién sacó cada toma.
-        </p>
+        <h2 className="font-serif-title text-xl text-brand-dark">{t.nameModalTitle}</h2>
+        <p className="mt-1 text-sm text-gray-500">{t.nameModalSubtitle}</p>
         <input
           autoFocus
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder="Tu nombre"
+          placeholder={t.yourName}
           maxLength={60}
           className="mt-4 w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-brand focus:outline-none"
         />
@@ -1603,10 +1665,10 @@ function NameModal({
             disabled={!value.trim()}
             className="w-full rounded-lg bg-brand py-2.5 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-40"
           >
-            Guardar
+            {t.save}
           </button>
           <button type="button" onClick={onSkip} className="text-xs text-gray-400 underline hover:text-gray-600">
-            Prefiero no decirlo
+            {t.skip}
           </button>
         </div>
       </form>
@@ -1619,6 +1681,7 @@ function NameModal({
 function Lightbox({
   media,
   index,
+  lang = 'es',
   onClose,
   onNavigate,
   onToggleLike,
@@ -1626,11 +1689,13 @@ function Lightbox({
 }: {
   media: MediaItem[];
   index: number;
+  lang?: Lang;
   onClose: () => void;
   onNavigate: (index: number) => void;
   onToggleLike: (mediaId: string) => void;
   onDelete?: (mediaId: string) => void | Promise<void>;
 }) {
+  const t = WORKSPACE_STRINGS[lang];
   const item = media[index];
   const [loaded, setLoaded] = useState(false);
   const [broken, setBroken] = useState(false);
@@ -1693,7 +1758,7 @@ function Lightbox({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-sm" onClick={requestClose}>
       <button
         onClick={requestClose}
-        aria-label="Cerrar"
+        aria-label={t.close}
         className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
       >
         <XIcon className="h-5 w-5" />
@@ -1706,7 +1771,7 @@ function Lightbox({
               e.stopPropagation();
               goTo(-1);
             }}
-            aria-label="Anterior"
+            aria-label={t.previous}
             className="absolute left-2 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-xl text-white hover:bg-white/20 sm:left-4"
           >
             ‹
@@ -1716,7 +1781,7 @@ function Lightbox({
               e.stopPropagation();
               goTo(1);
             }}
-            aria-label="Siguiente"
+            aria-label={t.next}
             className="absolute right-2 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-xl text-white hover:bg-white/20 sm:right-4"
           >
             ›
@@ -1737,7 +1802,7 @@ function Lightbox({
           {broken && (
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-white/5 text-white/50">
               <BrokenImageIcon className="h-10 w-10" />
-              <span className="text-xs font-medium uppercase tracking-wide">No se pudo cargar este archivo</span>
+              <span className="text-xs font-medium uppercase tracking-wide">{t.couldNotLoadFile}</span>
             </div>
           )}
 
@@ -1770,25 +1835,25 @@ function Lightbox({
             }`}
           >
             <HeartIcon className="h-4 w-4" filled={item.likedByMe} />
-            {item.likeCount > 0 ? item.likeCount : 'Me gusta'}
+            {item.likeCount > 0 ? item.likeCount : t.like}
           </button>
           <a
             href={item.downloadUrl}
             className="flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-sm font-semibold text-brand-dark shadow hover:bg-white/90"
           >
             <DownloadIcon className="h-4 w-4" />
-            Descargar
+            {t.download}
           </a>
           {onDelete && (
             <button
               onClick={async () => {
-                if (!confirm('¿Borrar esta foto/video?')) return;
+                if (!confirm(t.deleteMediaConfirm)) return;
                 await onDelete(item.id);
                 window.history.back(); // limpia la entrada de historial que abrimos al abrir el visor
               }}
               className="rounded-full border border-white/30 px-4 py-2 text-sm font-medium text-white hover:bg-white/10"
             >
-              Borrar
+              {t.delete}
             </button>
           )}
           {media.length > 1 && (
@@ -1797,7 +1862,11 @@ function Lightbox({
             </span>
           )}
         </div>
-        {item.uploader_label && <p className="text-xs text-white/50">Subido por {item.uploader_label}</p>}
+        {item.uploader_label && (
+          <p className="text-xs text-white/50">
+            {t.uploadedBy} {item.uploader_label}
+          </p>
+        )}
       </div>
     </div>
   );

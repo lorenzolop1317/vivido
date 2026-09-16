@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { BRANDS, type BrandKey } from '@/lib/brands';
+import { LANDING_STRINGS, type Lang } from '@/lib/i18n';
 
 function InstagramIcon({ className }: { className?: string }) {
   return (
@@ -24,8 +25,9 @@ function MailIcon({ className }: { className?: string }) {
 
 type FormState = 'idle' | 'sending' | 'sent' | 'error';
 
-export default function Footer({ brand = 'vivido' }: { brand?: BrandKey }) {
+export default function Footer({ brand = 'vivido', lang = 'es' }: { brand?: BrandKey; lang?: Lang }) {
   const config = BRANDS[brand];
+  const t = LANDING_STRINGS[lang];
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [message, setMessage] = useState('');
@@ -43,14 +45,14 @@ export default function Footer({ brand = 'vivido' }: { brand?: BrandKey }) {
         body: JSON.stringify({ name, email, message, brand }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'No se pudo enviar el mensaje.');
+      if (!res.ok) throw new Error(data.error ?? t.contactError);
       setState('sent');
       setName('');
       setEmail('');
       setMessage('');
     } catch (err) {
       setState('error');
-      setError(err instanceof Error ? err.message : 'Error inesperado.');
+      setError(err instanceof Error ? err.message : t.unexpectedError);
     }
   }
 
@@ -60,7 +62,7 @@ export default function Footer({ brand = 'vivido' }: { brand?: BrandKey }) {
         <div>
           {config.logoLockup ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={config.logoLockup} alt={config.name} className="h-11 w-auto" />
+            <img src={config.logoLockup} alt={config.name} className="h-16 w-auto sm:h-20" />
           ) : (
             <p className="font-display text-2xl text-brand-dark">{config.name}</p>
           )}
@@ -87,11 +89,9 @@ export default function Footer({ brand = 'vivido' }: { brand?: BrandKey }) {
         </div>
 
         <div>
-          <p className="text-sm font-semibold text-brand-dark">¿Nos escribís?</p>
+          <p className="text-sm font-semibold text-brand-dark">{t.contactTitle}</p>
           {state === 'sent' ? (
-            <p className="mt-3 rounded-lg bg-green-50 p-3 text-sm text-green-700">
-              ¡Gracias! Recibimos tu mensaje y te vamos a responder pronto.
-            </p>
+            <p className="mt-3 rounded-lg bg-green-50 p-3 text-sm text-green-700">{t.contactSent}</p>
           ) : (
             <form onSubmit={handleSubmit} className="mt-3 space-y-2.5">
               <div className="grid gap-2.5 sm:grid-cols-2">
@@ -99,7 +99,7 @@ export default function Footer({ brand = 'vivido' }: { brand?: BrandKey }) {
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="Tu nombre"
+                  placeholder={t.contactName}
                   className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
                 />
                 <input
@@ -107,7 +107,7 @@ export default function Footer({ brand = 'vivido' }: { brand?: BrandKey }) {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Tu email"
+                  placeholder={t.contactEmail}
                   className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
                 />
               </div>
@@ -115,7 +115,7 @@ export default function Footer({ brand = 'vivido' }: { brand?: BrandKey }) {
                 required
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                placeholder="Contanos en qué te podemos ayudar"
+                placeholder={t.contactMessage}
                 rows={3}
                 className="w-full resize-none rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-brand focus:outline-none"
               />
@@ -125,7 +125,7 @@ export default function Footer({ brand = 'vivido' }: { brand?: BrandKey }) {
                 disabled={state === 'sending'}
                 className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-dark disabled:opacity-50"
               >
-                {state === 'sending' ? 'Enviando…' : 'Enviar mensaje'}
+                {state === 'sending' ? t.contactSending : t.contactSend}
               </button>
             </form>
           )}

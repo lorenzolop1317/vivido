@@ -26,28 +26,35 @@ de eventos de una prima, **Divine Tables** (`/divine-tables`) — ver "Multi-mar
 
 ```
 app/                    páginas y API routes
-  page.tsx              crear álbum (Vívido)
-  divine-tables/page.tsx crear álbum (Divine Tables — mismo flujo, otra marca)
-  admin/[secret]/page.tsx panel de super usuario (protegido por ADMIN_SECRET)
+  page.tsx              panel de super usuario (login + dashboard) — vive en la URL base
+  vivido/page.tsx       crear álbum (Vívido) — antes vivía en "/", se movió acá sin tocarlo
+  divine-tables/page.tsx crear álbum (Divine Tables — mismo flujo, otra marca, con selector ES/EN)
   a/[token]/page.tsx     vista del álbum (se adapta según el rol del enlace y la marca)
   api/                   endpoints usados por los componentes cliente
-  api/admin/             endpoints del panel de admin (retención por álbum, borrado completo)
+  api/admin/             login/logout (cookie de sesión) + endpoints del panel (retención, borrado)
 components/
-  CreateAlbumForm.tsx    formulario de creación (cliente), acepta la marca como prop
-  AlbumWorkspace.tsx     subida, galería, portada y moderación (cliente)
-  AdminDashboard.tsx     lista de álbumes, toggle de retención y borrado completo (cliente)
+  CreateAlbumForm.tsx    formulario de creación (cliente), acepta marca + idioma como prop
+  InviteEmailPanel.tsx   subir lista de invitados y mandarles la invitación por email (cliente)
+  AlbumWorkspace.tsx     subida, galería, portada y moderación (cliente), bilingüe para Divine Tables
+  AdminLogin.tsx         formulario de login del panel de super usuario
+  AdminDashboard.tsx     lista de álbumes, espacio usado, toggle de retención y borrado completo
+  LanguageToggle.tsx     selector ES/EN (solo se muestra en Divine Tables)
   BrandTheme.tsx         pisa los colores/tipografía de marca en el navegador según el álbum
   Footer.tsx             pie de página (contacto, copyright, logo) — en todas las páginas
 lib/
   albums.ts              toda la lógica de negocio (roles, límites, ventanas, portada, admin)
   brands.ts              configuración de cada marca (colores, logo, contacto) — Vívido/Divine Tables
-  admin-auth.ts          valida el secreto del panel de super usuario
+  admin-auth.ts          login por contraseña (ADMIN_SECRET) + cookie de sesión httpOnly firmada
+  i18n.ts                diccionario ES/EN de Divine Tables (Vívido no lo usa, sigue en español)
+  guestList.ts           lee el Excel/CSV de invitados (nombre + email), corre en el navegador
+  mailer.ts              envío de emails vía Resend (server-only, necesita las env vars de abajo)
+  emailTemplates.ts      arma el HTML del email de invitación (logo/colores de marca + QR)
   contact.ts              guarda los mensajes del formulario de contacto
   r2.ts                  integración con Cloudflare R2
   supabase.ts            cliente de Supabase (server-only)
   export.ts               armado del .zip para descarga (siempre con el archivo original)
   cleanup.ts              archivado de álbumes vencidos (retención, solo si está activada)
-  limits.ts               los números del plan gratis, en un solo lugar
+  limits.ts               los números del plan gratis + el techo de la capa gratis de R2 (panel admin)
 supabase/schema.sql       esquema de base de datos, para pegar en Supabase
 ```
 
@@ -76,12 +83,31 @@ supabase/schema.sql       esquema de base de datos, para pegar en Supabase
    - `Secret Access Key` → `R2_SECRET_ACCESS_KEY`
    - Nombre del bucket → `R2_BUCKET_NAME`
 
-### 3. Variables de entorno
-Copiar `.env.example` a `.env.local` y completar los valores de los dos pasos anteriores,
-más un `CRON_SECRET` y un `ADMIN_SECRET` inventados (dos textos largos y distintos, al azar —
-por ejemplo con `openssl rand -hex 24`).
+### 3. Resend (opcional — envío de invitaciones por email)
+Sin este paso la app funciona igual; solo que el botón de "enviar invitaciones por email"
+(pantalla de álbum creado) muestra un aviso en vez de mandar nada. Cuando quieras activarlo:
+1. Crear cuenta gratis en [resend.com](https://resend.com) (capa gratis: 3.000 emails/mes,
+   100/día — de sobra para esta fase).
+2. En **Domains**, agregar un dominio propio tuyo (ej. `vivido.app`, o el que tengas) y cargar
+   en tu proveedor de DNS los 2-3 registros que Resend te muestra (SPF/DKIM). Esto es necesario
+   para poder mandarle a cualquier invitado — sin un dominio verificado, Resend solo deja
+   mandarte emails de prueba a vos mismo.
+   - Si Divine Tables no tiene dominio propio (hoy usa una cuenta de Gmail para contacto), no
+     hace falta verificar uno para cada marca por separado: alcanza con verificar **un solo**
+     dominio (el que tengas, ej. `vivido.app`) y usar una dirección de ese dominio como
+     remitente para las invitaciones de las dos marcas — el nombre que ve el invitado
+     ("De: Divine Tables <invitaciones@vivido.app>") igual sale de la marca del álbum, y las
+     respuestas llegan al email de contacto de esa marca (`lib/brands.ts`), no al tuyo.
+3. En **API Keys**, crear una y copiarla → variable `RESEND_API_KEY`.
+4. Elegir una dirección de ese dominio verificado (ej. `invitaciones@vivido.app`) → variable
+   `RESEND_FROM_EMAIL`.
 
-### 4. Correrlo en local
+### 4. Variables de entorno
+Copiar `.env.example` a `.env.local` y completar los valores de los pasos anteriores, más un
+`CRON_SECRET` y un `ADMIN_SECRET` inventados (dos textos largos y distintos, al azar — por
+ejemplo con `openssl rand -hex 24`). Las de Resend son opcionales, ver el paso 3.
+
+### 5. Correrlo en local
 ```bash
 npm install
 npm run dev
@@ -89,7 +115,7 @@ npm run dev
 Abrir `http://localhost:3000`, crear un álbum de prueba y probar el flujo completo
 (subir una foto, verla en la galería, borrarla, cerrar el álbum, descargar el zip).
 
-### 5. Desplegar en Vercel
+### 6. Desplegar en Vercel
 1. Subir este código a un repositorio de GitHub propio (`git init`, `git add`, `git commit`,
    crear el repo en GitHub y hacer push).
 2. En [vercel.com](https://vercel.com), **Add New → Project**, importar ese repositorio.
@@ -107,9 +133,36 @@ etc.), el auto-borrado por antigüedad viene **apagado por defecto** para todo �
 (columna `retention_enabled` en `albums`, `false` por default). Eso significa que ningún álbum
 se archiva ni se borra solo, sin importar cuántos días pasen — hasta que vos lo prendas a mano.
 
-El panel de super usuario vive en `https://tu-dominio/admin/<ADMIN_SECRET>` (el mismo modelo de
-"seguridad por enlace" que ya usa el resto de la app, no hay usuario/contraseña). Desde ahí podés:
+### Dónde vive cada cosa ahora (importante: esto cambió)
+
+Para que nadie pueda simplemente "cortar" la URL de un álbum y llegar a la gestión, la base del
+sitio (`https://tu-dominio/`) dejó de ser la página de creación de Vívido y ahora **es el panel
+de super usuario**, protegido con una pantalla de login (contraseña = `ADMIN_SECRET`, la misma
+variable de antes). La creación de álbumes se movió a rutas propias, iguales a como ya
+funcionaba Divine Tables:
+- **Crear álbum Vívido**: `https://tu-dominio/vivido` (antes era la URL base).
+- **Crear álbum Divine Tables**: `https://tu-dominio/divine-tables` (sin cambios).
+- **Panel de super usuario**: `https://tu-dominio/` (antes era `/admin/<ADMIN_SECRET>`).
+
+Nada de esto cambia el flujo de un invitado: los enlaces de álbum (`/a/<token>`) son los mismos
+de siempre y siguen sin necesitar login. Lo único que cambió es que ya no se puede "adivinar"
+la URL de gestión borrando el final de un enlace de álbum — ahora esa URL es un login real.
+
+El login ahora es un formulario (contraseña, no una URL secreta): entrás a `/`, escribís la
+contraseña de `ADMIN_SECRET` y accedés. Por dentro queda una cookie de sesión (httpOnly, 30
+días) — no hace falta volver a loguearse cada vez, y cerrar sesión es un botón dentro del panel.
+Desde el panel podés:
 - Ver todos los álbumes (de las dos marcas), cuánto espacio ocupa cada uno y cuándo se creó.
+- Ver de un vistazo el espacio total usado contra el límite de la capa gratis de Cloudflare R2
+  (10 GB) — es una estimación sumando lo que reportan los álbumes, no una consulta en vivo a la
+  facturación de Cloudflare.
+- Crear un álbum nuevo de cualquiera de las dos marcas (botones directos a `/vivido` y
+  `/divine-tables`).
+- Subir (o bajar) el tope de almacenamiento de un álbum puntual (selector con presets de 3 a
+  20 GB en cada tarjeta) — para cuando un evento concreto necesita más de los 3 GB del plan
+  gratis. Es manual álbum por álbum a propósito: como no hay eventos simultáneos en esta fase
+  beta, subirle el límite a uno no compromete a los demás — solo hay que vigilar el total
+  contra la capa gratis de R2 (el visor de espacio de arriba).
 - Prender o apagar el auto-borrado álbum por álbum (el interruptor "Auto-borrado por
   antigüedad").
 - Borrar un álbum por completo (fotos/videos en Cloudflare R2 + el álbum en la base) para
@@ -123,22 +176,61 @@ el interruptor para ese álbum puntual.
 ## Multi-marca (Vívido / Divine Tables)
 
 La app sirve dos "entornos" con la misma base de código, sin tocar nada de Vívido:
-- **Vívido** (`/`): queda exactamente como estaba.
+- **Vívido** (`/vivido` para crear; `/a/<token>` para ver un álbum): el flujo, el texto y los
+  colores quedan exactamente como estaban — el único cambio fue la URL de creación (ver arriba).
 - **Divine Tables** (`/divine-tables`): página de creación con el logo, colores (verde oscuro
   `#1f3b26` / crema `#f4eade`) y tipografía de esa marca, pensada para que tu prima la use en
-  sus eventos sin que aparezca "Vívido" en ningún lado.
+  sus eventos sin que aparezca "Vívido" en ningún lado. Tiene además un selector de idioma
+  (ES/EN, arriba a la derecha) tanto en la página de creación como dentro del álbum completo
+  (galería, subida, confirmaciones) — pensado para invitados de EE.UU. La preferencia de idioma
+  de cada visitante se guarda en su propio navegador.
 
 Toda la configuración de marca (nombre, colores, logo, tipografía, email de contacto,
 Instagram) vive en un solo lugar: `lib/brands.ts`. Cada álbum guarda con qué marca se creó
-(columna `brand` en `albums`), y `components/BrandTheme.tsx` aplica los colores/tipografía
-correctos en el navegador cuando alguien entra a un álbum de Divine Tables — sin duplicar
-ninguna clase de Tailwind ni tocar el diseño de Vívido. El panel de admin (arriba) deja
-filtrar y gestionar los álbumes de ambas marcas desde un mismo lugar.
+(columna `brand` en `albums`), `components/BrandTheme.tsx` aplica los colores/tipografía
+correctos en el navegador, y cada página (`/a/[token]`, `/divine-tables`) también ajusta el
+color de la barra de estado del celular según la marca — sin duplicar ninguna clase de Tailwind
+ni tocar el diseño de Vívido. El panel de admin (arriba) deja filtrar y gestionar los álbumes de
+ambas marcas desde un mismo lugar.
 
-Fuera de alcance por ahora (no bloquea el uso, es una limitación conocida): el manifest de la
-PWA y el ícono de "agregar a inicio" siguen siendo siempre los de Vívido — Next.js no permite
-un manifest distinto según la URL sin una reestructuración más grande. Si Divine Tables
-necesita instalarse como app propia más adelante, es la siguiente mejora natural acá.
+"Agregar a inicio" también respeta la marca: `/divine-tables` y cualquier álbum de Divine
+Tables (`/a/<token>`) usan su propio ícono y manifest (`public/brands/divine-tables/`), así que
+el ícono que queda en el escritorio/pantalla de inicio es el logo de Divine Tables, no el de
+Vívido. Esto se resuelve con `generateMetadata` en `app/a/[token]/page.tsx` — para un álbum de
+Vívido esa función devuelve `{}` a propósito (sin overrides), así que Vívido sigue heredando
+exactamente el manifest/ícono que ya definía `app/layout.tsx`, sin ningún cambio.
+
+También hay, en la pantalla de "álbum creado" de cualquiera de las dos marcas, un botón para
+generar y descargar un código QR del enlace de invitados (para imprimir o poner en una pantalla
+del evento) — se genera en el momento en el navegador, no se guarda en ningún lado.
+
+### Envío de invitaciones por email
+
+En esa misma pantalla de "álbum creado" hay una sección para invitar por email a toda la lista
+de golpe:
+1. Subís un Excel (`.xlsx`) o CSV con columnas **Nombre** y **Email** (también entiende
+   `Name`/`Email` en inglés) — se lee ahí mismo en el navegador, el archivo nunca se manda al
+   servidor tal cual.
+2. "Configurar mensaje" deja editar el asunto, el nombre del remitente y el texto (podés usar
+   `{{nombre}}` donde quieras que aparezca el nombre de cada invitado) antes de mandar nada.
+3. "Enviar a N invitados" le manda a cada uno un email con el look de la marca del álbum, el
+   texto configurado, un botón con el enlace de invitados y el código QR — uno por uno, con
+   una pequeña pausa entre cada envío para no pasarse del límite de la capa gratis de Resend.
+4. Si algunos fallan (email inválido, límite de la cuenta, etc.), quedan listados con el motivo
+   y hay un botón para reintentar solo esos.
+
+Esto no queda guardado en ningún lado más allá de lo que dura la sesión en esa pantalla — si
+recargás la página perdés la lista cargada (igual que ya pasaba con el enlace de invitados, que
+solo se muestra una vez al crear el álbum). Necesita tener configurado Resend (ver "Puesta en
+marcha" más arriba); sin eso, el botón de enviar avisa que todavía no está armado en vez de
+fallar en silencio.
+
+Pendiente de tu lado, sin bloquear nada: el diseño exacto del login y del pie del panel de
+super usuario (colores/orden/información puntual) todavía es una versión funcional y prolija
+pero no está calcado de ninguna referencia — cuando tengas esa imagen de referencia a mano la
+sumamos y lo pulimos. El envío masivo de invitaciones por email (subir una lista de invitados y
+mandarles el QR/enlace) está en definición — ver `BACKLOG.md`, necesita elegir un proveedor de
+email antes de construirlo.
 
 ## Limitaciones conocidas de este MVP (a propósito, para no sobre-construir antes de validar)
 

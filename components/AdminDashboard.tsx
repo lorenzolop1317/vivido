@@ -1,8 +1,10 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import type { AdminAlbumSummary } from '@/lib/albums';
 import { BRANDS, type BrandKey } from '@/lib/brands';
+import { INFRA_FREE_TIER } from '@/lib/limits';
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -21,14 +23,23 @@ function formatDate(iso: string | null) {
   return new Date(iso).toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+const GB = 1024 * 1024 * 1024;
+// Presets rápidos para el tope de un álbum puntual. No hay eventos simultáneos
+// en esta fase beta, así que subirle el límite a uno no compromete a los demás
+// — solo hay que no pasarse de la capa gratis de R2 en total (ver el visor de
+// espacio de arriba).
+const STORAGE_LIMIT_PRESETS_GB = [3, 5, 7, 10, 15, 20];
+
 type BrandFilter = 'all' | BrandKey;
 
-export default function AdminDashboard({ secret, initialAlbums }: { secret: string; initialAlbums: AdminAlbumSummary[] }) {
+export default function AdminDashboard({ initialAlbums }: { initialAlbums: AdminAlbumSummary[] }) {
+  const router = useRouter();
   const [albums, setAlbums] = useState(initialAlbums);
   const [brandFilter, setBrandFilter] = useState<BrandFilter>('all');
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   const filtered = useMemo(
     () => (brandFilter === 'all' ? albums : albums.filter((a) => a.brand === brandFilter)),
@@ -43,13 +54,29 @@ export default function AdminDashboard({ secret, initialAlbums }: { secret: stri
     }),
     [albums]
   );
+  const storagePercent = Math.min(100, (totals.storage / INFRA_FREE_TIER.r2StorageBytes) * 100);
+
+  // Si la cookie de sesión venció o se invalidó (ej. cambiaste ADMIN_SECRET),
+  // cualquier pedido a estas rutas devuelve 401 — en ese caso recargamos para
+  // que vuelva a aparecer la pantalla de login, en vez de dejar el panel
+  // mostrando datos viejos como si nada.
+  function handleUnauthorized() {
+    router.refresh();
+  }
 
   async function refresh() {
-    const res = await fetch(`/api/admin/albums?secret=${encodeURIComponent(secret)}`, { cache: 'no-store' });
+    const res = await fetch('/api/admin/albums', { cache: 'no-store' });
+    if (res.status === 401) return handleUnauthorized();
     if (res.ok) {
       const data = await res.json();
       setAlbums(data.albums);
     }
+  }
+
+  async function handleLogout() {
+    setLoggingOut(true);
+    await fetch('/api/admin/logout', { method: 'POST' }).catch(() => {});
+    router.refresh();
   }
 
   async function toggleRetention(album: AdminAlbumSummary) {
@@ -62,8 +89,9 @@ export default function AdminDashboard({ secret, initialAlbums }: { secret: stri
       const res = await fetch(`/api/admin/albums/${album.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ secret, retentionEnabled: next }),
+        body: JSON.stringify({ retentionEnabled: next }),
       });
+      if (res.status === 401) return handleUnauthorized();
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error ?? 'No se pudo actualizar.');
@@ -85,15 +113,39 @@ export default function AdminDashboard({ secret, initialAlbums }: { secret: stri
     setError(null);
     setPendingId(album.id);
     try {
-      const res = await fetch(`/api/admin/albums/${album.id}?secret=${encodeURIComponent(secret)}`, {
-        method: 'DELETE',
-      });
+      const res = await fetch(`/api/admin/albums/${album.id}`, { method: 'DELETE' });
+      if (res.status === 401) return handleUnauthorized();
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error ?? 'No se pudo borrar.');
       }
       setAlbums((prev) => prev.filter((a) => a.id !== album.id));
     } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error inesperado.');
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  async function updateStorageLimit(album: AdminAlbumSummary, bytes: number) {
+    setError(null);
+    setPendingId(album.id);
+    const prevLimit = album.storageLimitBytes;
+    // Optimista, igual que toggleRetention.
+    setAlbums((prev) => prev.map((a) => (a.id === album.id ? { ...a, storageLimitBytes: bytes } : a)));
+    try {
+      const res = await fetch(`/api/admin/albums/${album.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storageLimitBytes: bytes }),
+      });
+      if (res.status === 401) return handleUnauthorized();
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? 'No se pudo actualizar.');
+      }
+    } catch (err) {
+      setAlbums((prev) => prev.map((a) => (a.id === album.id ? { ...a, storageLimitBytes: prevLimit } : a)));
       setError(err instanceof Error ? err.message : 'Error inesperado.');
     } finally {
       setPendingId(null);
@@ -115,16 +167,55 @@ export default function AdminDashboard({ secret, initialAlbums }: { secret: stri
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Panel de super usuario</h1>
             <p className="mt-1 text-sm text-gray-500">
-              {totals.count} {totals.count === 1 ? 'álbum' : 'álbumes'} · {formatBytes(totals.storage)} en total ·{' '}
-              {totals.retentionOn} con auto-borrado activado
+              {totals.count} {totals.count === 1 ? 'álbum' : 'álbumes'} · {totals.retentionOn} con auto-borrado activado
             </p>
           </div>
-          <button
-            onClick={refresh}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-50"
-          >
-            Actualizar
-          </button>
+          <div className="flex items-center gap-2">
+            <a
+              href="/vivido"
+              className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-50"
+            >
+              + Álbum Vívido
+            </a>
+            <a
+              href="/divine-tables"
+              className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-50"
+            >
+              + Álbum Divine Tables
+            </a>
+            <button
+              onClick={refresh}
+              className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-50"
+            >
+              Actualizar
+            </button>
+            <button
+              onClick={handleLogout}
+              disabled={loggingOut}
+              className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            >
+              {loggingOut ? 'Saliendo…' : 'Cerrar sesión'}
+            </button>
+          </div>
+        </div>
+
+        <div className="mb-6 rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className="flex items-center justify-between text-sm text-gray-600">
+            <span className="font-medium text-gray-900">Espacio usado (todos los álbumes)</span>
+            <span>
+              {formatBytes(totals.storage)} de {formatBytes(INFRA_FREE_TIER.r2StorageBytes)} (capa gratis de Cloudflare R2)
+            </span>
+          </div>
+          <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-gray-100">
+            <div
+              className={`h-full transition-all ${storagePercent > 85 ? 'bg-red-500' : storagePercent > 60 ? 'bg-amber-500' : 'bg-brand'}`}
+              style={{ width: `${storagePercent}%` }}
+            />
+          </div>
+          <p className="mt-2 text-xs text-gray-400">
+            Estimado a partir de lo que suman todos los álbumes (fotos/videos originales + copias livianas). Es una
+            referencia, no una consulta en vivo a la facturación de Cloudflare.
+          </p>
         </div>
 
         <div className="mb-5 flex gap-2">
@@ -181,7 +272,8 @@ export default function AdminDashboard({ secret, initialAlbums }: { secret: stri
                       {formatDate(album.created_at)}
                     </p>
                     <p className="mt-1 text-xs text-gray-500">
-                      {formatBytes(album.storageUsedBytes)} · {album.mediaCount} {album.mediaCount === 1 ? 'archivo' : 'archivos'}
+                      {formatBytes(album.storageUsedBytes)} de {formatBytes(album.storageLimitBytes)} · {album.mediaCount}{' '}
+                      {album.mediaCount === 1 ? 'archivo' : 'archivos'}
                       {album.retention_enabled && album.windows.viewableUntil && (
                         <> · se archiva el {formatDate(album.windows.viewableUntil)}</>
                       )}
@@ -207,28 +299,51 @@ export default function AdminDashboard({ secret, initialAlbums }: { secret: stri
                   </div>
                 </div>
 
-                <label className="mt-3 flex w-fit items-center gap-2.5 text-sm text-gray-700">
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={album.retention_enabled}
-                    onClick={() => toggleRetention(album)}
-                    disabled={busy}
-                    className={`relative h-6 w-11 shrink-0 rounded-full transition disabled:opacity-50 ${
-                      album.retention_enabled ? 'bg-brand' : 'bg-gray-300'
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition ${
-                        album.retention_enabled ? 'left-[22px]' : 'left-0.5'
+                <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2">
+                  <label className="flex w-fit items-center gap-2.5 text-sm text-gray-700">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={album.retention_enabled}
+                      onClick={() => toggleRetention(album)}
+                      disabled={busy}
+                      className={`relative h-6 w-11 shrink-0 rounded-full transition disabled:opacity-50 ${
+                        album.retention_enabled ? 'bg-brand' : 'bg-gray-300'
                       }`}
-                    />
-                  </button>
-                  Auto-borrado por antigüedad {album.retention_enabled ? 'activado' : 'desactivado'}
-                  {album.retention_days != null && (
-                    <span className="text-xs text-gray-400">({album.retention_days} días)</span>
-                  )}
-                </label>
+                    >
+                      <span
+                        className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition ${
+                          album.retention_enabled ? 'left-[22px]' : 'left-0.5'
+                        }`}
+                      />
+                    </button>
+                    Auto-borrado por antigüedad {album.retention_enabled ? 'activado' : 'desactivado'}
+                    {album.retention_days != null && (
+                      <span className="text-xs text-gray-400">({album.retention_days} días)</span>
+                    )}
+                  </label>
+
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    Tope de este álbum
+                    <select
+                      value={Math.round(album.storageLimitBytes / GB)}
+                      disabled={busy}
+                      onChange={(e) => updateStorageLimit(album, Number(e.target.value) * GB)}
+                      className="rounded-lg border border-gray-300 bg-white px-2 py-1 text-sm disabled:opacity-50"
+                    >
+                      {STORAGE_LIMIT_PRESETS_GB.map((gb) => (
+                        <option key={gb} value={gb}>
+                          {gb} GB
+                        </option>
+                      ))}
+                      {!STORAGE_LIMIT_PRESETS_GB.includes(Math.round(album.storageLimitBytes / GB)) && (
+                        <option value={Math.round(album.storageLimitBytes / GB)}>
+                          {(album.storageLimitBytes / GB).toFixed(1)} GB
+                        </option>
+                      )}
+                    </select>
+                  </label>
+                </div>
               </div>
             );
           })}

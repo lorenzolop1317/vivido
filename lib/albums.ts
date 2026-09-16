@@ -125,6 +125,19 @@ export async function resolveToken(token: string) {
   return { role: tokenRow.role as AlbumRole, album: album as AlbumRow };
 }
 
+/** Busca el token del enlace de invitados (contributor) de un álbum, para el envío masivo de invitaciones. */
+export async function getContributorToken(albumId: string): Promise<string | null> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from('album_tokens')
+    .select('token')
+    .eq('album_id', albumId)
+    .eq('role', 'contributor')
+    .maybeSingle();
+  if (error) throw error;
+  return data?.token ?? null;
+}
+
 export async function getStorageUsedBytes(albumId: string): Promise<number> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase.from('media').select('size_bytes, display_size_bytes').eq('album_id', albumId);
@@ -650,6 +663,7 @@ export interface AdminAlbumSummary {
   created_at: string;
   organizerLink: string | null;
   storageUsedBytes: number;
+  storageLimitBytes: number;
   mediaCount: number;
   windows: AlbumWindows;
 }
@@ -699,6 +713,7 @@ export async function listAllAlbums(): Promise<AdminAlbumSummary[]> {
     created_at: album.created_at,
     organizerLink: organizerByAlbum.has(album.id) ? `/a/${organizerByAlbum.get(album.id)}` : null,
     storageUsedBytes: storageByAlbum.get(album.id) ?? 0,
+    storageLimitBytes: album.storage_limit_bytes,
     mediaCount: countByAlbum.get(album.id) ?? 0,
     windows: computeWindows(album),
   }));
@@ -708,6 +723,27 @@ export async function listAllAlbums(): Promise<AdminAlbumSummary[]> {
 export async function setAlbumRetentionEnabled(albumId: string, enabled: boolean): Promise<{ ok: boolean; reason?: string }> {
   const supabase = getSupabaseAdmin();
   const { error } = await supabase.from('albums').update({ retention_enabled: enabled }).eq('id', albumId);
+  if (error) throw error;
+  return { ok: true };
+}
+
+const MIN_ALBUM_STORAGE_BYTES = 512 * 1024 * 1024; // 512 MB — piso de sanidad
+const MAX_ALBUM_STORAGE_BYTES = 20 * 1024 * 1024 * 1024; // 20 GB — techo de sanidad para un solo álbum
+
+/**
+ * Sube (o baja) el tope de almacenamiento de un álbum puntual — para cuando
+ * un evento concreto necesita más de los 3 GB del plan gratis. Es manual y
+ * por álbum a propósito: no hay eventos simultáneos en esta fase beta, así
+ * que el super usuario puede subirle el límite a un álbum grande sabiendo
+ * que ninguno otro lo está usando al mismo tiempo, y bajarlo de nuevo después
+ * si hace falta.
+ */
+export async function setAlbumStorageLimit(albumId: string, bytes: number): Promise<{ ok: boolean; reason?: string }> {
+  if (!Number.isFinite(bytes) || bytes < MIN_ALBUM_STORAGE_BYTES || bytes > MAX_ALBUM_STORAGE_BYTES) {
+    return { ok: false, reason: 'El límite debe estar entre 512 MB y 20 GB.' };
+  }
+  const supabase = getSupabaseAdmin();
+  const { error } = await supabase.from('albums').update({ storage_limit_bytes: Math.round(bytes) }).eq('id', albumId);
   if (error) throw error;
   return { ok: true };
 }

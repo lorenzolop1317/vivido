@@ -1,0 +1,13 @@
+{
+  "name": "Divine Tables",
+  "short_name": "Divine Tables",
+  "description": "Compartí las fotos de tu evento en un solo álbum, sin apps ni login.",
+  "start_url": "/divine-tables",
+  "display": "standalone",
+  "background_color": "#f4eade",
+  "theme_color": "#3f6b45",
+  "icons": [
+    { "src": "/brands/divine-tables/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/brands/divine-tables/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
