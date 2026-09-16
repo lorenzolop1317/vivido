@@ -186,6 +186,12 @@ Desde el panel podés:
 - Descargar directamente todas las fotos/videos que subieron los invitados de un álbum
   puntual (botón "Download Data" en cada tarjeta) — arma un .zip con los archivos originales,
   igual que el botón de descarga que ya tiene el organizador dentro de su propio álbum.
+- Volver a ver los tres enlaces de un álbum (botón "Enlaces Web" en cada tarjeta, abre en una
+  pestaña nueva) — la pantalla que se muestra justo después de crear un álbum (los tres enlaces
+  + QR del enlace de invitados + envío de invitaciones por email) antes solo existía en ese
+  momento: si el organizador la perdía, no había forma de recuperar el QR ni los enlaces de
+  invitados/solo-ver (el de organizador sí se podía volver a copiar desde acá). Ahora esa misma
+  pantalla vive en `/links/<token-de-organizador>` y se puede volver a abrir cuando haga falta.
 - Prender o apagar el auto-borrado álbum por álbum (el interruptor "Auto-borrado por
   antigüedad").
 - Borrar un álbum por completo (fotos/videos en Cloudflare R2 + el álbum en la base) para

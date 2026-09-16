@@ -91,7 +91,25 @@ notas sueltas para más adelante:
   falta subir el estándar de seguridad, reemplazar por la build oficial de
   SheetJS (cdn.sheetjs.com) en vez de la de npm.
   Pendiente para más adelante: hoy no hay forma de "guardar" la lista de
-  invitados entre sesiones (si recargás la pantalla de creación la perdés,
-  igual que ya pasaba con el enlace de invitados) — si hace falta reenviar
-  días después, habría que guardar la lista en la base en vez de solo en la
-  sesión del navegador.
+  invitados entre sesiones (si recargás la pantalla de creación la perdés) —
+  si hace falta reenviar días después, habría que guardar la lista en la
+  base en vez de solo en la sesión del navegador. (Los enlaces del álbum en
+  sí ya no se pierden más — ver el punto siguiente.)
+- ~~**Recuperar los enlaces/QR de un álbum si se pierden**~~ — implementado:
+  la pantalla de "álbum creado" (los tres enlaces + QR + envío de
+  invitaciones) se extrajo a un componente propio (`components/AlbumLinksView.tsx`)
+  que ahora se reusa en dos lugares: justo después de crear el álbum (como
+  siempre) y en la nueva ruta `app/links/[token]/page.tsx`, que muestra lo
+  mismo a partir del token de organizador en cualquier momento posterior. El
+  panel de super usuario tiene un botón "Enlaces Web" por álbum
+  (`components/AdminDashboard.tsx`) que lleva ahí (se abre en pestaña nueva).
+  La página solo acepta el token de **organizador** — `resolveToken` +
+  chequeo de `role === 'organizer'`, si no da 404 — y de ahí busca los otros
+  dos tokens con `getAllRoleTokens` (`lib/albums.ts`). No hace falta guardar
+  nada nuevo en la base: los tres tokens ya existían desde que se crea el
+  álbum, antes simplemente no había una pantalla para volver a verlos.
+  Sigue sin haber una entrada de "ver enlaces" pensada para que el propio
+  organizador se las arregle solo (hoy depende de vos, Lorenzo, compartiendo
+  el link de `/links/<token>` si alguien te escribe pidiendo recuperarlos) —
+  si hace falta más adelante, se podría agregar un botón similar dentro del
+  álbum mismo para quien entra como organizador.

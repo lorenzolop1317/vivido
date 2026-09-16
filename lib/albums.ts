@@ -138,6 +138,35 @@ export async function getContributorToken(albumId: string): Promise<string | nul
   return data?.token ?? null;
 }
 
+/**
+ * Busca los tres tokens (organizador/invitados/solo ver) de un álbum, para la
+ * pantalla de "Enlaces Web" a la que se puede volver desde el panel de super
+ * usuario si el organizador pierde los enlaces originales. `createAlbum` solo
+ * genera estos tres roles hoy (no hay token de moderador todavía), así que
+ * alcanza con pedir estos tres.
+ */
+export async function getAllRoleTokens(
+  albumId: string
+): Promise<Record<'organizer' | 'contributor' | 'viewer', string> | null> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from('album_tokens')
+    .select('token, role')
+    .eq('album_id', albumId)
+    .in('role', ['organizer', 'contributor', 'viewer']);
+  if (error) throw error;
+
+  const tokens: Partial<Record<'organizer' | 'contributor' | 'viewer', string>> = {};
+  for (const row of data ?? []) {
+    const role: string = row.role;
+    if (role === 'organizer' || role === 'contributor' || role === 'viewer') {
+      tokens[role] = row.token;
+    }
+  }
+  if (!tokens.organizer || !tokens.contributor || !tokens.viewer) return null;
+  return tokens as Record<'organizer' | 'contributor' | 'viewer', string>;
+}
+
 export async function getStorageUsedBytes(albumId: string): Promise<number> {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase.from('media').select('size_bytes, display_size_bytes').eq('album_id', albumId);

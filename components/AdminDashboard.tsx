@@ -286,6 +286,14 @@ export default function AdminDashboard({ initialAlbums }: { initialAlbums: Admin
                     {album.organizerLink && (
                       <>
                         <a
+                          href={`/links/${album.organizerLink.replace('/a/', '')}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                        >
+                          Enlaces Web
+                        </a>
+                        <a
                           href={`/api/albums/${album.organizerLink.replace('/a/', '')}/export`}
                           className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
                         >
